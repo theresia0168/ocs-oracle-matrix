@@ -37,6 +37,8 @@ export const newSub = (idx) => ({
   nextReview: null,   // 다음 전술 재검토 턴 (계획 단계 시작 시 설정)
   showP: false,
   showS: false,
+  sp: 0,             // 접근 가능 SP (보급 범위 내)
+  units: [],         // 배속 유닛 목록: [{id, name, steps, supplied}]
 });
 
 // ── 계획 주기 (1턴 = 반 주 ≈ 3~4일, 군단·군 단위 기준) ──────

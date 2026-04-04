@@ -130,6 +130,18 @@ export default function App() {
   const removeSub  = id => setSubs(ss => ss.filter(s => s.id !== id));
   const rollSubAll = id => updateSub(id, { personality: rollP(), autonomy: randAutonomy() });
 
+  // ── 제대 전황 기록 (SP / 유닛) ───────────────────────────────
+  const updateSubSp   = (id, sp)                 => updateSub(id, { sp });
+  const addSubUnit    = (id)                     => setSubs(ss => ss.map(s => s.id === id
+    ? { ...s, units: [...(s.units ?? []), { id: uid(), name: "", steps: 3, supplied: true }] }
+    : s));
+  const removeSubUnit = (subId, unitId)          => setSubs(ss => ss.map(s => s.id === subId
+    ? { ...s, units: s.units.filter(u => u.id !== unitId) }
+    : s));
+  const updateSubUnit = (subId, unitId, patch)   => setSubs(ss => ss.map(s => s.id === subId
+    ? { ...s, units: s.units.map(u => u.id === unitId ? { ...u, ...patch } : u) }
+    : s));
+
   // ── 계획 단계 ─────────────────────────────────────────────
   const startPhase = () => {
     if (cmdr?.directive) {
@@ -441,7 +453,13 @@ export default function App() {
                           {subs.map(sub => (
                             <div key={sub.id} style={{ flex: `0 0 ${COL_W}px`, display: "flex", flexDirection: "column", alignItems: "center" }}>
                               <div style={{ width: 2, height: 28, background: "#4B5563" }} />
-                              <OOBSubNode sub={sub} turn={turn} />
+                              <OOBSubNode
+                                sub={sub} turn={turn}
+                                onUpdateSp={sp => updateSubSp(sub.id, sp)}
+                                onAddUnit={() => addSubUnit(sub.id)}
+                                onRemoveUnit={unitId => removeSubUnit(sub.id, unitId)}
+                                onUpdateUnit={(unitId, patch) => updateSubUnit(sub.id, unitId, patch)}
+                              />
                             </div>
                           ))}
                         </div>
