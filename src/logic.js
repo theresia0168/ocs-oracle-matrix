@@ -37,6 +37,7 @@ export const newSub = (idx) => ({
   nextReview: null,   // 다음 전술 재검토 턴 (계획 단계 시작 시 설정)
   showP: false,
   showS: false,
+  showStatus: false, // 전황 기록 패널 토글
   sp: 0,             // 접근 가능 SP (보급 범위 내)
   units: [],         // 배속 유닛 목록: [{id, name, steps, supplied}]
 });

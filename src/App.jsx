@@ -403,6 +403,83 @@ export default function App() {
                       ))}
                     </div>
                   )}
+
+                  {/* 전황 기록 */}
+                  <div className="mt-3 pt-3 border-t border-gray-700">
+                    <button onClick={() => updateSub(sub.id, { showStatus: !sub.showStatus })}
+                      className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                      {sub.showStatus ? "▲ 전황 기록 접기" : "▼ 전황 기록"}
+                    </button>
+                    {sub.showStatus && (
+                      <div className="mt-3 space-y-3">
+                        {/* 가용 SP */}
+                        <div className="flex items-center gap-3">
+                          <label className="text-gray-400 text-sm w-20 shrink-0">가용 SP</label>
+                          <input
+                            type="number" min={0}
+                            value={sub.sp ?? 0}
+                            onChange={e => updateSubSp(sub.id, Number(e.target.value))}
+                            className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-100 text-sm w-24 focus:outline-none focus:border-amber-500"
+                          />
+                          <span className="text-gray-600 text-xs">제대별 독립 산정 (중첩 가능)</span>
+                        </div>
+
+                        {/* 유닛 목록 */}
+                        <div>
+                          <div className="text-gray-400 text-sm mb-2">배속 유닛</div>
+                          {(sub.units ?? []).length > 0 && (
+                            <div className="space-y-1.5 mb-2">
+                              {/* 헤더 */}
+                              <div className="flex items-center gap-2 text-gray-600 text-xs px-1">
+                                <span className="flex-1">유닛명</span>
+                                <span className="w-16 text-center">현재 스텝</span>
+                                <span className="w-12 text-center">보급</span>
+                                <span className="w-6" />
+                              </div>
+                              {(sub.units ?? []).map(u => (
+                                <div key={u.id} className="flex items-center gap-2 bg-gray-900 rounded px-2 py-1.5">
+                                  <input
+                                    type="text"
+                                    value={u.name}
+                                    placeholder="유닛명 (예: 3Pz)"
+                                    onChange={e => updateSubUnit(sub.id, u.id, { name: e.target.value })}
+                                    className="bg-transparent border-b border-gray-700 text-gray-100 text-sm flex-1 min-w-0 focus:outline-none focus:border-amber-400"
+                                  />
+                                  <input
+                                    type="number" min={0} max={9}
+                                    value={u.steps}
+                                    onChange={e => updateSubUnit(sub.id, u.id, { steps: Number(e.target.value) })}
+                                    className="bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5 text-gray-100 text-sm w-16 text-center focus:outline-none focus:border-amber-500"
+                                  />
+                                  <div className="flex items-center gap-1.5 w-12 justify-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={u.supplied}
+                                      onChange={e => updateSubUnit(sub.id, u.id, { supplied: e.target.checked })}
+                                      className="accent-green-500 w-4 h-4"
+                                    />
+                                    <span className={`text-xs ${u.supplied ? "text-green-500" : "text-red-400"}`}>
+                                      {u.supplied ? "○" : "✕"}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => removeSubUnit(sub.id, u.id)}
+                                    className="text-gray-600 hover:text-red-400 text-base w-6 text-center transition-colors"
+                                  >×</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => addSubUnit(sub.id)}
+                            className="w-full text-sm text-gray-500 hover:text-gray-300 border border-dashed border-gray-700 hover:border-gray-500 rounded py-1.5 transition-colors"
+                          >
+                            + 유닛 추가
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -453,13 +530,7 @@ export default function App() {
                           {subs.map(sub => (
                             <div key={sub.id} style={{ flex: `0 0 ${COL_W}px`, display: "flex", flexDirection: "column", alignItems: "center" }}>
                               <div style={{ width: 2, height: 28, background: "#4B5563" }} />
-                              <OOBSubNode
-                                sub={sub} turn={turn}
-                                onUpdateSp={sp => updateSubSp(sub.id, sp)}
-                                onAddUnit={() => addSubUnit(sub.id)}
-                                onRemoveUnit={unitId => removeSubUnit(sub.id, unitId)}
-                                onUpdateUnit={(unitId, patch) => updateSubUnit(sub.id, unitId, patch)}
-                              />
+                              <OOBSubNode sub={sub} turn={turn} />
                             </div>
                           ))}
                         </div>
