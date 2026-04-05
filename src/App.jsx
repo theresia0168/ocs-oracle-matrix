@@ -4,7 +4,7 @@ import { P_AXES, S_FACTORS, AUTONOMY, PLOT_TWISTS, FOLLOWUP_YES_AND, FOLLOWUP_NO
 import {
   rnd, rollP, uid, pick, ts, randAutonomy,
   newCommander, newSub,
-  getCycle, getFollowupTable,
+  getCycle, getCmdrCycle, getFollowupTable,
   calcDirective, calcTactics, calcTacticsIndependent, calcConflict,
   queryOracle,
 } from './logic.js';
@@ -37,6 +37,13 @@ export default function App() {
   const [oracleAns, setOracleAns]   = useState(null);
   const [oracleUnit, setOracleUnit] = useState("commander");
   const [log, setLog] = useState([]);
+  const [memoInput, setMemoInput]       = useState("");
+  const [logInputMode, setLogInputMode] = useState("memo");     // "memo" | "battle"
+  const [battleSubId, setBattleSubId]   = useState("");
+  const [battleUnitIds, setBattleUnitIds] = useState([]);
+  const [battleSide, setBattleSide]     = useState("attack");
+  const [battleResult, setBattleResult] = useState("");
+  const [battleNote, setBattleNote]     = useState("");
 
   // ── 재검토 긴박도 뱃지 ──────────────────────────────────────
   const reviewBadge = (nextReview) => {
@@ -119,7 +126,39 @@ export default function App() {
   };
 
   // ── 헬퍼 ──────────────────────────────────────────────────
-  const addLog = entry => setLog(l => [{ id: uid(), time: ts(), ...entry }, ...l]);
+  const addLog = entry => setLog(l => [{ id: uid(), time: ts(), turn, ...entry }, ...l]);
+
+  const addMemo = () => {
+    if (!memoInput.trim()) return;
+    addLog({ type: "memo", label: memoInput });
+    setMemoInput("");
+  };
+
+  const toggleBattleUnit = (unitId) =>
+    setBattleUnitIds(ids =>
+      ids.includes(unitId) ? ids.filter(i => i !== unitId) : [...ids, unitId]
+    );
+
+  const handleBattleSubChange = (id) => {
+    setBattleSubId(id);
+    setBattleUnitIds([]);
+  };
+
+  const addBattle = () => {
+    if (!battleSubId || !battleResult.trim()) return;
+    const sub    = subs.find(s => s.id === battleSubId);
+    const picked = (sub?.units ?? []).filter(u => battleUnitIds.includes(u.id));
+    addLog({
+      type:  "battle",
+      label: `${sub?.name ?? "??"} — ${battleSide === "attack" ? "공격" : "방어"}`,
+      detail: battleResult.trim(),
+      units:  picked.map(u => u.name),
+      note:   battleNote.trim() || null,
+    });
+    setBattleUnitIds([]);
+    setBattleResult("");
+    setBattleNote("");
+  };
 
   const updateCmdr  = patch => setCmdr(c => ({ ...c, ...patch }));
   const updateCmdrP = (i, v) => setCmdr(c => ({ ...c, personality: c.personality.map((x, j) => j === i ? v : x) }));
@@ -146,16 +185,17 @@ export default function App() {
   const startPhase = () => {
     if (cmdr?.directive) {
       setPlanHistory(h => [{
-        phase, time: ts(),
+        phase, time: ts(), turn,
         directive: cmdr.directive,
         subsSnapshot: subs.map(s => ({
           id: s.id, name: s.name, sector: s.sector, autonomy: s.autonomy,
           tactics: s.tactics, conflict: s.conflict, quickOracleResult: s.quickOracleResult,
+          sp: s.sp ?? 0, units: s.units ?? [],
         })),
       }, ...h]);
     }
 
-    const cmdrCycleLen = getCycle(cmdr?.personality[5] ?? 4).turns;
+    const cmdrCycleLen = getCmdrCycle(cmdr?.personality[5] ?? 4).turns;
     const newCmdrReview = turn + cmdrCycleLen;
     setCmdrNextReview(newCmdrReview);
 
@@ -276,6 +316,10 @@ export default function App() {
                 <div className="flex items-center gap-1.5 border-l border-gray-700 pl-2">
                   <span className="text-gray-500 text-xs">T</span>
                   <span className="text-white font-bold text-lg leading-none">{turn}</span>
+                  <button onClick={() => setTurn(t => Math.max(1, t - 1))}
+                    className="text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded leading-none"
+                    title="1턴 후퇴">-1
+                  </button>
                   <button onClick={() => setTurn(t => t + 1)}
                     className="text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded leading-none"
                     title="1턴 진행">+1
@@ -339,8 +383,8 @@ export default function App() {
                       className="bg-transparent border-b border-gray-600 text-amber-300 font-bold text-lg focus:outline-none focus:border-amber-400" />
                   </div>
                   <div className="flex gap-1.5 items-center">
-                    <span className={`text-xs ${getCycle(cmdr.personality[5]).color}`}>
-                      {getCycle(cmdr.personality[5]).label}
+                    <span className={`text-xs ${getCmdrCycle(cmdr.personality[5]).color}`}>
+                      {getCmdrCycle(cmdr.personality[5]).label}
                     </span>
                     <button onClick={() => updateCmdr({ personality: rollP() })}
                       className="text-xs bg-amber-900 hover:bg-amber-800 border border-amber-700 text-amber-300 px-2 py-1 rounded">🎲 롤</button>
@@ -577,8 +621,8 @@ export default function App() {
               <div>
                 <div className="text-amber-400 font-bold">계획 단계 #{phase}</div>
                 {cmdr && (
-                  <div className={`text-xs mt-0.5 ${getCycle(cmdr.personality[5]).color}`}>
-                    총사령관 적응력 {cmdr.personality[5]} → {getCycle(cmdr.personality[5]).label}
+                  <div className={`text-xs mt-0.5 ${getCmdrCycle(cmdr.personality[5]).color}`}>
+                    총사령관 적응력 {cmdr.personality[5]} → {getCmdrCycle(cmdr.personality[5]).label}
                   </div>
                 )}
               </div>
@@ -632,6 +676,17 @@ export default function App() {
                     </div>
                   </div>
                   <PBadges personality={sub.personality} />
+                  {/* 전황 요약 (읽기 전용) */}
+                  {(sub.sp > 0 || (sub.units ?? []).length > 0) && (
+                    <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
+                      <span className="text-gray-500">전황</span>
+                      <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{sub.sp ?? 0}</span></span>
+                      <span className="text-gray-400">유닛 <span className="text-gray-200 font-bold">{(sub.units ?? []).length}개</span></span>
+                      {(sub.units ?? []).filter(u => !u.supplied).length > 0 && (
+                        <span className="text-red-400 font-bold">⚠ 미보급 {(sub.units ?? []).filter(u => !u.supplied).length}</span>
+                      )}
+                    </div>
+                  )}
                   <button onClick={() => updateSub(sub.id, { showS: !sub.showS })}
                     className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
                     {sub.showS ? "▲ 구역 전황 접기" : "▼ 구역 전황 입력"}
@@ -739,6 +794,7 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         <span className="text-gray-400 text-sm font-bold">계획 #{h.phase}</span>
                         <span className={`text-xs px-2 py-0.5 rounded ${h.directive.tag}`}>{h.directive.icon} {h.directive.name}</span>
+                        {h.turn != null && <span className="text-gray-600 text-xs font-mono">T{h.turn}</span>}
                       </div>
                       <span className="text-gray-600 text-xs">{h.time} {historyOpen === h.phase ? "▲" : "▼"}</span>
                     </button>
@@ -750,6 +806,7 @@ export default function App() {
                         </div>
                         {h.subsSnapshot.filter(s => s.tactics).map(s => {
                           const au = AUTONOMY[s.autonomy];
+                          const unsupplied = (s.units ?? []).filter(u => !u.supplied).length;
                           return (
                             <div key={s.id} className={`bg-gray-800 border-l-2 rounded-lg p-3 ${au.cardBorder}`}>
                               <div className="flex items-center gap-2 mb-2">
@@ -757,6 +814,13 @@ export default function App() {
                                 <span className="text-gray-600 text-xs">{s.sector}</span>
                                 <span className={`text-xs px-1 py-0.5 rounded ml-auto ${au.tagCls}`}>{au.name}</span>
                               </div>
+                              {(s.sp > 0 || (s.units ?? []).length > 0) && (
+                                <div className="flex items-center gap-3 text-xs text-gray-600 mb-2">
+                                  <span>SP <span className="text-gray-400">{s.sp ?? 0}</span></span>
+                                  <span>유닛 <span className="text-gray-400">{(s.units ?? []).length}개</span></span>
+                                  {unsupplied > 0 && <span className="text-red-500">⚠ 미보급 {unsupplied}</span>}
+                                </div>
+                              )}
                               <TacticsGrid tactics={s.tactics} />
                             </div>
                           );
@@ -862,12 +926,186 @@ export default function App() {
         {tab === "log" && (
           <>
             <div className="text-amber-400 font-bold">작전 일지</div>
+
+            {/* ── 입력 모드 토글 ── */}
+            <div className="flex gap-2">
+              <button onClick={() => setLogInputMode("memo")}
+                className={`flex-1 text-sm py-2 rounded border transition-colors
+                  ${logInputMode === "memo"
+                    ? "bg-blue-900 border-blue-600 text-blue-200"
+                    : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"}`}>
+                📝 메모
+              </button>
+              <button onClick={() => setLogInputMode("battle")}
+                disabled={!started || subs.length === 0}
+                className={`flex-1 text-sm py-2 rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed
+                  ${logInputMode === "battle"
+                    ? "bg-orange-900 border-orange-600 text-orange-200"
+                    : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"}`}>
+                ⚔ 전투 기록
+              </button>
+            </div>
+
+            {/* ── 메모 입력 ── */}
+            {logInputMode === "memo" && (
+              <div className="bg-gray-800 rounded-xl p-3 flex gap-2">
+                <input
+                  value={memoInput}
+                  onChange={e => setMemoInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && addMemo()}
+                  placeholder="작전 메모 입력 후 Enter 또는 추가 버튼"
+                  className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-amber-500"
+                />
+                <button onClick={addMemo} disabled={!memoInput.trim()}
+                  className="text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-40 border border-gray-600 px-3 py-1.5 rounded transition-colors whitespace-nowrap">
+                  📝 추가
+                </button>
+              </div>
+            )}
+
+            {/* ── 전투 기록 입력 ── */}
+            {logInputMode === "battle" && (
+              <div className="bg-gray-800 border border-orange-900 rounded-xl p-4 space-y-4">
+
+                {/* 제대 선택 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">제대 선택</div>
+                  <div className="flex flex-wrap gap-2">
+                    {subs.map(s => (
+                      <button key={s.id} onClick={() => handleBattleSubChange(s.id)}
+                        className={`text-sm px-3 py-1.5 rounded border transition-colors
+                          ${battleSubId === s.id
+                            ? "bg-orange-900 border-orange-600 text-orange-200"
+                            : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                        {s.name}
+                        {s.sector ? <span className="text-xs opacity-60 ml-1">/ {s.sector}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 참가 유닛 선택 */}
+                {battleSubId && (() => {
+                  const subUnits = subs.find(s => s.id === battleSubId)?.units ?? [];
+                  return (
+                    <div>
+                      <div className="text-gray-500 text-xs mb-1.5">참가 유닛 <span className="text-gray-700">(선택 안 하면 제대 전체)</span></div>
+                      {subUnits.length === 0
+                        ? <div className="text-gray-700 text-xs">등록된 유닛 없음</div>
+                        : (
+                          <div className="flex flex-wrap gap-2">
+                            {subUnits.map(u => (
+                              <button key={u.id} onClick={() => toggleBattleUnit(u.id)}
+                                className={`text-xs px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5
+                                  ${battleUnitIds.includes(u.id)
+                                    ? "bg-orange-900 border-orange-600 text-orange-200"
+                                    : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                                {battleUnitIds.includes(u.id) && <span>✓</span>}
+                                {u.name || "(이름 없음)"}
+                                <span className={`opacity-60 ${!u.supplied ? "text-red-400" : ""}`}>
+                                  {u.steps}스텝{!u.supplied ? " ⚠" : ""}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )
+                      }
+                    </div>
+                  );
+                })()}
+
+                {/* 공/방 선택 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">공격 / 방어</div>
+                  <div className="flex gap-2">
+                    {[
+                      { id: "attack",  label: "⚔ 공격" },
+                      { id: "defense", label: "🛡 방어" },
+                    ].map(opt => (
+                      <button key={opt.id} onClick={() => setBattleSide(opt.id)}
+                        className={`flex-1 py-2 rounded border text-sm transition-colors
+                          ${battleSide === opt.id
+                            ? "bg-orange-900 border-orange-600 text-orange-200"
+                            : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 전투 결과 입력 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">전투 결과</div>
+                  <input
+                    value={battleResult}
+                    onChange={e => setBattleResult(e.target.value)}
+                    placeholder="예: Dback 2헥스 / AL 2스텝 / 교착"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                {/* 비고 (선택) */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">비고 <span className="text-gray-700">(선택)</span></div>
+                  <input
+                    value={battleNote}
+                    onChange={e => setBattleNote(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addBattle()}
+                    placeholder="예: 3Pz 1스텝 손실, 후퇴 2헥스"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                <button onClick={addBattle}
+                  disabled={!battleSubId || !battleResult}
+                  className="w-full bg-orange-800 hover:bg-orange-700 disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded font-bold text-sm transition-colors">
+                  ⚔ 전투 결과 기록
+                </button>
+              </div>
+            )}
+
+            {/* ── 로그 목록 ── */}
             {log.length === 0
               ? <div className="text-gray-700 text-center py-20">기록 없음</div>
               : (
                 <div className="space-y-2">
                   {log.map(e => {
-                    const icons = { phase: "📅", directive: "📋", tactics: "⚙", oracle: "🔮" };
+                    const icons = { phase: "📅", directive: "📋", tactics: "⚙", oracle: "🔮", memo: "📝", battle: "⚔" };
+
+                    /* 전투 기록 전용 렌더링 */
+                    if (e.type === "battle") {
+                      return (
+                        <div key={e.id} className="bg-gray-800 rounded-lg p-3 border-l-2 border-orange-700">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm">
+                                <span className="text-gray-600">⚔ </span>
+                                <span className="text-orange-300 font-bold">{e.label}</span>
+                                {e.detail && (
+                                  <span className="ml-2 text-xs font-bold text-amber-300">
+                                    {e.detail}
+                                  </span>
+                                )}
+                              </div>
+                              {e.units?.length > 0 && (
+                                <div className="text-xs text-gray-500 mt-0.5">
+                                  {e.units.join(" · ")}
+                                </div>
+                              )}
+                              {e.note && (
+                                <div className="text-xs text-gray-600 mt-0.5 italic">{e.note}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {e.turn != null && <span className="text-gray-600 text-xs font-mono">T{e.turn}</span>}
+                              <span className="text-gray-700 text-xs">{e.time}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    /* 일반 로그 렌더링 */
                     const detailColor = e.type === "oracle"
                       ? (e.detail?.startsWith("예") ? "text-green-400" : "text-red-400")
                       : e.detail?.includes("⚠") ? "text-red-400"
@@ -875,14 +1113,17 @@ export default function App() {
                       : e.detail?.includes("⚡") ? "text-purple-400"
                       : "text-amber-400";
                     return (
-                      <div key={e.id} className="bg-gray-800 rounded-lg p-3 border-l-2 border-gray-700">
+                      <div key={e.id} className={`bg-gray-800 rounded-lg p-3 border-l-2 ${e.type === "memo" ? "border-blue-700" : "border-gray-700"}`}>
                         <div className="flex items-start justify-between gap-2">
                           <div className="text-sm min-w-0">
                             <span className="text-gray-600">{icons[e.type] || "·"} </span>
-                            <span className="text-gray-300">{e.label}</span>
+                            <span className={e.type === "memo" ? "text-blue-300" : "text-gray-300"}>{e.label}</span>
                             {e.detail && <span className={`ml-2 text-xs ${detailColor}`}>{e.detail}</span>}
                           </div>
-                          <span className="text-gray-700 text-xs shrink-0">{e.time}</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {e.turn != null && <span className="text-gray-600 text-xs font-mono">T{e.turn}</span>}
+                            <span className="text-gray-700 text-xs">{e.time}</span>
+                          </div>
                         </div>
                       </div>
                     );

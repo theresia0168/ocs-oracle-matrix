@@ -1,5 +1,5 @@
 import { AUTONOMY } from '../constants.js';
-import { getCycle }  from '../logic.js';
+import { getCycle, getCmdrCycle } from '../logic.js';
 import { PBadges }   from './PBadges.jsx';
 
 // ── 재검토 뱃지 계산 헬퍼 ─────────────────────────────────────
@@ -13,7 +13,7 @@ function calcBadge(nextReview, turn, cycleColor) {
 
 // ── 총사령관 OOB 노드 ─────────────────────────────────────────
 export function OOBCommanderNode({ cmdr, cmdrNextReview, turn }) {
-  const cycle = getCycle(cmdr.personality[5]);
+  const cycle = getCmdrCycle(cmdr.personality[5]);
   const badge = calcBadge(cmdrNextReview, turn, cycle.color);
   return (
     <div className="bg-gray-800 border-2 border-amber-600 rounded-xl p-4 text-center" style={{ width: 220 }}>

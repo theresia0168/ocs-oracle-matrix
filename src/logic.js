@@ -49,6 +49,14 @@ export const getCycle = (adaptability) => {
   return                        { turns: 6, label: "6턴·3주 재검토",  color: "text-green-400"  };
 };
 
+// ── 총사령관 전용 계획 주기 (하위 제대보다 한 단계 긴 주기) ──
+// 적응력 고(6~7): 4턴·2주 / 중(4~5): 6턴·3주 / 저(1~3): 8턴·4주
+export const getCmdrCycle = (adaptability) => {
+  if (adaptability >= 6) return { turns: 4, label: "4턴·2주 재검토",  color: "text-yellow-400" };
+  if (adaptability >= 4) return { turns: 6, label: "6턴·3주 재검토",  color: "text-green-400"  };
+  return                        { turns: 8, label: "8턴·4주 재검토",  color: "text-blue-400"   };
+};
+
 // ── 후속 테이블 선택 ─────────────────────────────────────────
 export const getFollowupTable = (answer) => {
   if (answer === "예, 그리고...")    return { table: FOLLOWUP_YES_AND, label: "그리고 — 행동 강화"  };

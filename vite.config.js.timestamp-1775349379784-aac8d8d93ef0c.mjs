@@ -1,0 +1,11 @@
+// vite.config.js
+import { defineConfig } from "file:///sessions/gallant-festive-lovelace/mnt/OCS%20%EB%A9%94%EA%B0%80%20%EC%98%A4%EB%9D%BC%ED%81%B4%20%EB%A7%A4%ED%8A%B8%EB%A6%AD%EC%8A%A4/ocs-oracle-matrix/node_modules/vite/dist/node/index.js";
+import react from "file:///sessions/gallant-festive-lovelace/mnt/OCS%20%EB%A9%94%EA%B0%80%20%EC%98%A4%EB%9D%BC%ED%81%B4%20%EB%A7%A4%ED%8A%B8%EB%A6%AD%EC%8A%A4/ocs-oracle-matrix/node_modules/@vitejs/plugin-react/dist/index.js";
+var vite_config_default = defineConfig({
+  plugins: [react()],
+  base: "/ocs-oracle-matrix/"
+});
+export {
+  vite_config_default as default
+};
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsidml0ZS5jb25maWcuanMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbImNvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9kaXJuYW1lID0gXCIvc2Vzc2lvbnMvZ2FsbGFudC1mZXN0aXZlLWxvdmVsYWNlL21udC9PQ1MgXHVCQTU0XHVBQzAwIFx1QzYyNFx1Qjc3Q1x1RDA3NCBcdUI5RTRcdUQyQjhcdUI5QURcdUMyQTQvb2NzLW9yYWNsZS1tYXRyaXhcIjtjb25zdCBfX3ZpdGVfaW5qZWN0ZWRfb3JpZ2luYWxfZmlsZW5hbWUgPSBcIi9zZXNzaW9ucy9nYWxsYW50LWZlc3RpdmUtbG92ZWxhY2UvbW50L09DUyBcdUJBNTRcdUFDMDAgXHVDNjI0XHVCNzdDXHVEMDc0IFx1QjlFNFx1RDJCOFx1QjlBRFx1QzJBNC9vY3Mtb3JhY2xlLW1hdHJpeC92aXRlLmNvbmZpZy5qc1wiO2NvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9pbXBvcnRfbWV0YV91cmwgPSBcImZpbGU6Ly8vc2Vzc2lvbnMvZ2FsbGFudC1mZXN0aXZlLWxvdmVsYWNlL21udC9PQ1MlMjAlRUIlQTklOTQlRUElQjAlODAlMjAlRUMlOTglQTQlRUIlOUQlQkMlRUQlODElQjQlMjAlRUIlQTclQTQlRUQlOEElQjglRUIlQTYlQUQlRUMlOEElQTQvb2NzLW9yYWNsZS1tYXRyaXgvdml0ZS5jb25maWcuanNcIjtpbXBvcnQgeyBkZWZpbmVDb25maWcgfSBmcm9tICd2aXRlJ1xuaW1wb3J0IHJlYWN0IGZyb20gJ0B2aXRlanMvcGx1Z2luLXJlYWN0J1xuXG5leHBvcnQgZGVmYXVsdCBkZWZpbmVDb25maWcoe1xuICBwbHVnaW5zOiBbcmVhY3QoKV0sXG4gIGJhc2U6ICcvb2NzLW9yYWNsZS1tYXRyaXgvJyxcbn0pXG4iXSwKICAibWFwcGluZ3MiOiAiO0FBQXdkLFNBQVMsb0JBQW9CO0FBQ3JmLE9BQU8sV0FBVztBQUVsQixJQUFPLHNCQUFRLGFBQWE7QUFBQSxFQUMxQixTQUFTLENBQUMsTUFBTSxDQUFDO0FBQUEsRUFDakIsTUFBTTtBQUNSLENBQUM7IiwKICAibmFtZXMiOiBbXQp9Cg==
