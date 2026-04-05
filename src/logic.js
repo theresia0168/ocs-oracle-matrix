@@ -9,7 +9,12 @@ import {
 
 // ── 유틸 ─────────────────────────────────────────────────────
 export const rnd  = (mn, mx) => Math.floor(Math.random() * (mx - mn + 1)) + mn;
-export const rollP = () => Array.from({ length: 8 }, () => rnd(1, 7));
+export const rollP = () => {
+  let p;
+  do { p = Array.from({ length: 8 }, () => rnd(1, 7)); }
+  while (Math.max(...Object.values(p.reduce((a,v)=>(a[v]=(a[v]||0)+1,a),{}))) > 2);
+  return p;
+};
 export const uid   = () => Math.random().toString(36).slice(2, 9);
 export const pick  = (arr) => arr[rnd(0, arr.length - 1)];
 export const ts    = () => new Date().toLocaleTimeString("ko-KR", { hour:"2-digit", minute:"2-digit" });
