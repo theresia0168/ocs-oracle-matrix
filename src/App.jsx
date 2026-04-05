@@ -6,6 +6,7 @@ import {
   newCommander, newSub,
   getCycle, getCmdrCycle, getFollowupTable,
   calcDirective, calcTactics, calcTacticsIndependent, calcConflict,
+  getEffectiveAutonomy,
   queryOracle,
 } from './logic.js';
 import { PSlider, SSlider }         from './components/Sliders.jsx';
@@ -213,7 +214,7 @@ export default function App() {
     setCmdr(c => ({ ...c, directive: null }));
     setSubs(ss => ss.map(s => ({
       ...s,
-      tactics: null, conflict: null, quickOracleResult: null,
+      tactics: null, conflict: null, quickOracleResult: null, effectiveAutonomy: null,
       nextReview: s.autonomy === "compliant"
         ? newCmdrReview
         : turn + getCycle(s.personality[5]).turns,
@@ -229,14 +230,16 @@ export default function App() {
 
   const genTactics = (sub) => {
     if (!cmdr.directive) return;
+    const authority        = cmdr.authority ?? 4;
+    const effectiveAutonomy = getEffectiveAutonomy(sub.autonomy, authority);
     const conflict = calcConflict(sub.personality, sub.situation, cmdr.directive.id);
-    const tactics  = sub.autonomy === "independent"
+    const tactics  = effectiveAutonomy === "independent"
       ? calcTacticsIndependent(sub.personality, sub.situation)
       : calcTactics(cmdr.directive.id, sub.personality, sub.situation);
     const nextReview = (sub.nextReview !== null && turn >= sub.nextReview)
       ? turn + getCycle(sub.personality[5]).turns
       : sub.nextReview;
-    updateSub(sub.id, { tactics, conflict, quickOracleResult: null, nextReview });
+    updateSub(sub.id, { tactics, conflict, effectiveAutonomy, quickOracleResult: null, nextReview });
     addLog({ type: "tactics", label: `${sub.name} (${sub.sector})`, detail: conflict.level === "none" ? "✓" : conflict.level === "strong" ? "⚠ 강충돌" : "△ 약충돌" });
   };
 
@@ -363,7 +366,7 @@ export default function App() {
         {tab === "setup" && (
           <>
             <input value={gameName} onChange={e => setGameName(e.target.value)}
-              placeholder="작전명 (예: GB2 Northern Pincers)"
+              placeholder="게임/시나리오 이름"
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 focus:outline-none focus:border-amber-500" />
 
             {/* 총사령관 */}
@@ -395,6 +398,39 @@ export default function App() {
                   </div>
                 </div>
                 <PBadges personality={cmdr.personality} />
+                {/* 권위 컨트롤 */}
+                {(() => {
+                  const auth = cmdr.authority ?? 4;
+                  const authLabel = auth >= 6 ? "고권위" : auth <= 2 ? "저권위" : "중권위";
+                  const authColor = auth >= 6 ? "text-amber-400" : auth <= 2 ? "text-blue-400" : "text-gray-500";
+                  const authDesc  = auth >= 6
+                    ? "독자행동형도 지시 고려"
+                    : auth <= 2
+                    ? "상황판단·독자행동형 자율 작전"
+                    : "각 유형 성향 그대로";
+                  return (
+                    <div className="mt-3 flex items-center gap-3">
+                      <span className="text-gray-500 text-xs w-8 shrink-0">권위</span>
+                      <div className="flex gap-1">
+                        {[1,2,3,4,5,6,7].map(v => (
+                          <button key={v} onClick={() => updateCmdr({ authority: v })}
+                            className={`w-7 h-7 text-xs rounded border transition-colors
+                              ${auth === v
+                                ? v >= 6 ? "bg-amber-800 border-amber-600 text-amber-200"
+                                : v <= 2 ? "bg-blue-900 border-blue-600 text-blue-200"
+                                : "bg-gray-600 border-gray-500 text-gray-200"
+                                : "bg-gray-800 border-gray-700 text-gray-600 hover:text-gray-400"}`}>
+                            {v}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-xs font-bold ${authColor}`}>{authLabel}</span>
+                        <span className="text-gray-600 text-xs">— {authDesc}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
                 {cmdr.showP && (
                   <div className="mt-4 pt-4 border-t border-gray-700">
                     {P_AXES.map((ax, i) => <PSlider key={i} axis={ax} value={cmdr.personality[i]} onChange={v => updateCmdrP(i, v)} />)}
@@ -485,7 +521,7 @@ export default function App() {
                                   <input
                                     type="text"
                                     value={u.name}
-                                    placeholder="유닛명 (예: 3Pz)"
+                                    placeholder="유닛명"
                                     onChange={e => updateSubUnit(sub.id, u.id, { name: e.target.value })}
                                     className="bg-transparent border-b border-gray-700 text-gray-100 text-sm flex-1 min-w-0 focus:outline-none focus:border-amber-400"
                                   />
@@ -642,6 +678,16 @@ export default function App() {
             <div className="bg-gray-800 border border-amber-800 rounded-xl p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-amber-400 font-bold">★ {cmdr?.name} — 전략 지시</div>
+                {cmdr && (() => {
+                  const auth = cmdr.authority ?? 4;
+                  const authColor = auth >= 6 ? "text-amber-400" : auth <= 2 ? "text-blue-400" : "text-gray-500";
+                  const authLabel = auth >= 6 ? "고권위" : auth <= 2 ? "저권위" : "중권위";
+                  return (
+                    <span className={`text-xs font-bold ${authColor}`}>
+                      권위 {auth} · {authLabel}
+                    </span>
+                  );
+                })()}
               </div>
               {cmdr && <PBadges personality={cmdr.personality} />}
               <div className="text-gray-600 text-xs uppercase tracking-wider mt-4 mb-2">전황 평가 (맵에서 직접 읽어 입력)</div>
@@ -667,12 +713,18 @@ export default function App() {
                       <span className="font-bold text-gray-100">{sub.name}</span>
                       <span className="text-gray-600 text-sm ml-2">/ {sub.sector}</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
                       {rb && (
                         <span className={`text-xs px-1.5 py-0.5 rounded ${rb.color} ${rb.bgCls}`}>{rb.label}</span>
                       )}
                       <span className={`text-xs ${cycle.color}`}>{cycle.label}</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded ${au.tagCls}`}>{au.name}</span>
+                      {/* 실효 자율성 — 실제 유형과 다를 때만 표시 */}
+                      {sub.effectiveAutonomy && sub.effectiveAutonomy !== sub.autonomy && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded border ${AUTONOMY[sub.effectiveAutonomy].tagCls}`}>
+                          → {AUTONOMY[sub.effectiveAutonomy].name}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <PBadges personality={sub.personality} />
@@ -706,7 +758,8 @@ export default function App() {
                       : isDue ? "⚠ 재검토 시점 — 전술 방침 갱신"
                       : "⚙ 전술 방침 생성"}
                   </button>
-                  <ConflictBadge conflict={sub.conflict} autonomy={sub.autonomy}
+                  <ConflictBadge conflict={sub.conflict}
+                    autonomy={sub.effectiveAutonomy ?? sub.autonomy}
                     onQuickOracle={() => quickOracle(sub.id, sub.name)} />
                   {sub.quickOracleResult && (
                     <div className={`mt-2 text-sm font-bold ${sub.quickOracleResult.startsWith("예") ? "text-green-400" : "text-red-400"}`}>
@@ -852,7 +905,7 @@ export default function App() {
               <div>
                 <div className="text-gray-500 text-xs mb-1.5">예/아니오 형식으로 질문</div>
                 <textarea value={oracleQ} onChange={e => setOracleQ(e.target.value)}
-                  placeholder="예: 현재 돌파구를 추격으로 활용할 것인가?"
+                  placeholder="예: 측면이 위협 받을 수 있지만 전진할 것인가?"
                   rows={3}
                   className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-gray-100 resize-none focus:outline-none focus:border-amber-500" />
               </div>
@@ -1039,7 +1092,7 @@ export default function App() {
                   <input
                     value={battleResult}
                     onChange={e => setBattleResult(e.target.value)}
-                    placeholder="예: Dback 2헥스 / AL 2스텝 / 교착"
+                    placeholder="예: Ao1 DL1o1"
                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-orange-500"
                   />
                 </div>

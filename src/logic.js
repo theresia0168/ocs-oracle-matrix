@@ -22,6 +22,7 @@ export const newCommander = () => ({
   situation: Array(8).fill(4),
   directive: null,
   showP: false,
+  authority: 4,      // 지휘 권위 (1~7, 기본 중권위 4)
 });
 
 export const newSub = (idx) => ({
@@ -34,13 +35,29 @@ export const newSub = (idx) => ({
   tactics: null,
   conflict: null,
   quickOracleResult: null,
-  nextReview: null,   // 다음 전술 재검토 턴 (계획 단계 시작 시 설정)
+  effectiveAutonomy: null, // 권위 적용 후 실효 자율성 (전술 생성 시 갱신)
+  nextReview: null,
   showP: false,
   showS: false,
-  showStatus: false, // 전황 기록 패널 토글
-  sp: 0,             // 접근 가능 SP (보급 범위 내)
-  units: [],         // 배속 유닛 목록: [{id, name, steps, supplied}]
+  showStatus: false,
+  sp: 0,
+  units: [],
 });
+
+// ── 지휘 권위 → 실효 자율성 변환 ─────────────────────────────
+// 명령복종형은 권위와 무관하게 항상 지시 집행
+// 고권위(6~7): independent→situational, situational→compliant
+// 저권위(1~2): situational→independent (compliant는 그대로)
+export const getEffectiveAutonomy = (autonomy, authority) => {
+  if (authority >= 6) {
+    if (autonomy === "independent")  return "situational";
+    if (autonomy === "situational")  return "compliant";
+  }
+  if (authority <= 2) {
+    if (autonomy === "situational")  return "independent";
+  }
+  return autonomy;
+};
 
 // ── 계획 주기 (1턴 = 반 주 ≈ 3~4일, 군단·군 단위 기준) ──────
 export const getCycle = (adaptability) => {
