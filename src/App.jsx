@@ -3,12 +3,19 @@ import { useState, useEffect, useRef } from "react";
 import { P_AXES, S_FACTORS, AUTONOMY, PLOT_TWISTS, FOLLOWUP_YES_AND, FOLLOWUP_NO_AND, FOLLOWUP_BUT } from './constants.js';
 import {
   rnd, rollP, uid, pick, ts, randAutonomy,
-  newCommander, newSub,
+  newCommander, newSub, newGroup,
   getCycle, getCmdrCycle, getFollowupTable,
-  calcDirective, calcTactics, calcTacticsIndependent, calcConflict,
-  getEffectiveAutonomy,
+  calcDirective, calcGroupDirective, calcTactics, calcTacticsIndependent, calcConflict,
+  getEffectiveAutonomy, checkSpRedistribution,
   queryOracle,
 } from './logic.js';
+
+// ── 역할 표시 설정 ─────────────────────────────────────────────
+const ROLES = {
+  주공:  { label: "주공",  icon: "⚡", tagCls: "bg-red-900 text-red-300",    border: "border-red-700"   },
+  조공:  { label: "조공",  icon: "↗",  tagCls: "bg-blue-900 text-blue-300",  border: "border-blue-700"  },
+  예비대: { label: "예비대", icon: "⛺", tagCls: "bg-green-900 text-green-300", border: "border-green-700" },
+};
 import { PSlider, SSlider }         from './components/Sliders.jsx';
 import { PBadges }                   from './components/PBadges.jsx';
 import { TacticsGrid, DirectiveCard } from './components/TacticsGrid.jsx';
@@ -30,6 +37,7 @@ export default function App() {
 
   const [cmdr, setCmdr] = useState(null);
   const [subs, setSubs] = useState([]);
+  const [groups, setGroups] = useState([]);
 
   const [planHistory, setPlanHistory] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(null);
@@ -39,12 +47,17 @@ export default function App() {
   const [oracleUnit, setOracleUnit] = useState("commander");
   const [log, setLog] = useState([]);
   const [memoInput, setMemoInput]       = useState("");
-  const [logInputMode, setLogInputMode] = useState("memo");     // "memo" | "battle"
+  const [logInputMode, setLogInputMode] = useState("memo");     // "memo" | "battle" | "barrage"
   const [battleSubId, setBattleSubId]   = useState("");
   const [battleUnitIds, setBattleUnitIds] = useState([]);
+  const [battleUnitSteps, setBattleUnitSteps] = useState({}); // { unitId: 전투 후 스텝 }
   const [battleSide, setBattleSide]     = useState("attack");
   const [battleResult, setBattleResult] = useState("");
   const [battleNote, setBattleNote]     = useState("");
+  const [barrageType, setBarrageType]   = useState("포격");   // "포격" | "폭격"
+  const [barrageTarget, setBarrageTarget] = useState("");
+  const [barrageLocation, setBarrageLocation] = useState("");
+  const [barrageResult, setBarrageResult] = useState("");
 
   // ── 재검토 긴박도 뱃지 ──────────────────────────────────────
   const reviewBadge = (nextReview) => {
@@ -61,7 +74,7 @@ export default function App() {
 
   const collectState = () => ({
     gameName, phase, turn, cmdrNextReview,
-    cmdr, subs, planHistory, log, started,
+    cmdr, subs, groups, planHistory, log, started,
   });
 
   const applyState = (d) => {
@@ -71,6 +84,7 @@ export default function App() {
     setCmdrNextReview(d.cmdrNextReview ?? null);
     setCmdr(d.cmdr                  ?? null);
     setSubs(d.subs                  ?? []);
+    setGroups(d.groups              ?? []);
     setPlanHistory(d.planHistory    ?? []);
     setLog(d.log                    ?? []);
     setStarted(d.started            ?? false);
@@ -135,28 +149,75 @@ export default function App() {
     setMemoInput("");
   };
 
-  const toggleBattleUnit = (unitId) =>
+  const toggleBattleUnit = (unitId) => {
     setBattleUnitIds(ids =>
       ids.includes(unitId) ? ids.filter(i => i !== unitId) : [...ids, unitId]
     );
+    setBattleUnitSteps(prev => {
+      const next = { ...prev };
+      if (next[unitId] !== undefined) delete next[unitId];
+      return next;
+    });
+  };
 
   const handleBattleSubChange = (id) => {
     setBattleSubId(id);
     setBattleUnitIds([]);
+    setBattleUnitSteps({});
+  };
+
+  const addBarrage = () => {
+    if (!barrageTarget.trim() && !barrageLocation.trim()) return;
+    addLog({
+      type:     "barrage",
+      barType:  barrageType,
+      target:   barrageTarget.trim()   || null,
+      location: barrageLocation.trim() || null,
+      result:   barrageResult.trim()   || null,
+    });
+    setBarrageTarget("");
+    setBarrageLocation("");
+    setBarrageResult("");
   };
 
   const addBattle = () => {
     if (!battleSubId || !battleResult.trim()) return;
     const sub    = subs.find(s => s.id === battleSubId);
     const picked = (sub?.units ?? []).filter(u => battleUnitIds.includes(u.id));
+
+    // 로그 유닛명: 스텝 변경 있으면 "유닛명(before→after스텝)" 형식
+    const unitLabels = picked.map(u => {
+      const after = battleUnitSteps[u.id];
+      if (after !== "" && after !== undefined) return `${u.name || "?"}(${u.singleStep ? 1 : u.steps}→${after}스텝)`;
+      return u.name || "?";
+    });
+
     addLog({
-      type:  "battle",
-      label: `${sub?.name ?? "??"} — ${battleSide === "attack" ? "공격" : "방어"}`,
+      type:   "battle",
+      label:  `${sub?.name ?? "??"} — ${battleSide === "attack" ? "공격" : "방어"}`,
       detail: battleResult.trim(),
-      units:  picked.map(u => u.name),
+      units:  unitLabels,
       note:   battleNote.trim() || null,
     });
+
+    // 전투 후 스텝 즉시 반영
+    const stepsToApply = Object.entries(battleUnitSteps).filter(([, v]) => v !== "" && v !== undefined);
+    if (stepsToApply.length > 0) {
+      setSubs(ss => ss.map(s => {
+        if (s.id !== battleSubId) return s;
+        return {
+          ...s,
+          units: s.units.map(u => {
+            const after = battleUnitSteps[u.id];
+            if (after !== "" && after !== undefined) return { ...u, steps: Number(after) };
+            return u;
+          }),
+        };
+      }));
+    }
+
     setBattleUnitIds([]);
+    setBattleUnitSteps({});
     setBattleResult("");
     setBattleNote("");
   };
@@ -169,6 +230,23 @@ export default function App() {
   const addSub     = () => setSubs(ss => [...ss, newSub(ss.length + 1)]);
   const removeSub  = id => setSubs(ss => ss.filter(s => s.id !== id));
   const rollSubAll = id => updateSub(id, { personality: rollP(), autonomy: randAutonomy() });
+
+  // ── 집단군 관리 ───────────────────────────────────────────────
+  const addGroup       = ()           => setGroups(gs => [...gs, newGroup(gs.length + 1)]);
+  const removeGroup    = (id)         => {
+    setGroups(gs => gs.filter(g => g.id !== id));
+    setSubs(ss => ss.map(s => s.groupId === id ? { ...s, groupId: null, role: null } : s));
+  };
+  const updateGroup    = (id, patch)  => setGroups(gs => gs.map(g => g.id === id ? { ...g, ...patch } : g));
+  const updateGroupCmdr = (id, patch) => setGroups(gs => gs.map(g => g.id === id
+    ? { ...g, commander: { ...g.commander, ...patch } } : g));
+  const rollGroupCmdrAll = (id)       => updateGroupCmdr(id, { personality: rollP() });
+  const genGroupDirective = (group)   => {
+    if (!cmdr?.directive) return;
+    const d = calcGroupDirective(cmdr.directive.id, group.role, group.commander.personality, group.commander.situation);
+    updateGroupCmdr(group.id, { directive: d });
+    addLog({ type: "directive", label: group.commander.name, detail: d.name });
+  };
 
   // ── 제대 전황 기록 (SP / 유닛) ───────────────────────────────
   const updateSubSp   = (id, sp)                 => updateSub(id, { sp });
@@ -221,6 +299,7 @@ export default function App() {
     setPlotResult(plotR);
     setPhase(p => p + 1);
     setCmdr(c => ({ ...c, directive: null }));
+    setGroups(gs => gs.map(g => ({ ...g, commander: { ...g.commander, directive: null } })));
     setSubs(ss => ss.map(s => ({
       ...s,
       tactics: null, conflict: null, quickOracleResult: null, effectiveAutonomy: null,
@@ -239,12 +318,15 @@ export default function App() {
 
   const genTactics = (sub) => {
     if (!cmdr.directive) return;
-    const authority        = cmdr.authority ?? 4;
+    // 집단군 지시가 있으면 우선 적용, 없으면 OKH 지시 사용
+    const group          = groups.find(g => g.id === sub.groupId);
+    const activeDirective = group?.commander?.directive ?? cmdr.directive;
+    const authority       = cmdr.authority ?? 4;
     const effectiveAutonomy = getEffectiveAutonomy(sub.autonomy, authority);
-    const conflict = calcConflict(sub.personality, sub.situation, cmdr.directive.id);
+    const conflict = calcConflict(sub.personality, sub.situation, activeDirective.id);
     const tactics  = effectiveAutonomy === "independent"
-      ? calcTacticsIndependent(sub.personality, sub.situation)
-      : calcTactics(cmdr.directive.id, sub.personality, sub.situation);
+      ? calcTacticsIndependent(sub.personality, sub.situation, sub.role)
+      : calcTactics(activeDirective.id, sub.personality, sub.situation, sub.role);
     const nextReview = (sub.nextReview !== null && turn >= sub.nextReview)
       ? turn + getCycle(sub.personality[5]).turns
       : sub.nextReview;
@@ -448,6 +530,59 @@ export default function App() {
               </div>
             )}
 
+            {/* 집단군 편성 */}
+            {cmdr && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-gray-500 text-xs uppercase tracking-wider">집단군 편성</div>
+                  <button onClick={addGroup}
+                    className="text-xs bg-gray-700 hover:bg-gray-600 border border-gray-600 px-2 py-1 rounded">
+                    + 집단군 추가
+                  </button>
+                </div>
+                {groups.map(group => (
+                  <div key={group.id} className="bg-gray-800 border border-purple-800 rounded-xl p-4 space-y-3">
+                    {/* 집단군 헤더 */}
+                    <div className="flex items-center gap-2">
+                      <input value={group.name}
+                        onChange={e => updateGroup(group.id, { name: e.target.value })}
+                        className="bg-transparent border-b border-gray-600 text-purple-300 font-bold flex-1 focus:outline-none focus:border-purple-400 text-sm" />
+                      {/* 역할 선택 */}
+                      <div className="flex gap-1">
+                        {Object.entries(ROLES).map(([r, cfg]) => (
+                          <button key={r}
+                            onClick={() => updateGroup(group.id, { role: group.role === r ? null : r })}
+                            className={`text-xs px-2 py-0.5 rounded border transition-colors ${group.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
+                            {cfg.icon} {r}
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={() => removeGroup(group.id)} className="text-gray-600 hover:text-red-400 text-base ml-1">×</button>
+                    </div>
+                    {/* 집단군사령관 */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-gray-500 text-xs">집단군사령관</span>
+                      <button onClick={() => rollGroupCmdrAll(group.id)}
+                        className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">🎲 롤</button>
+                      <button onClick={() => updateGroupCmdr(group.id, { showP: !group.commander.showP })}
+                        className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                        {group.commander.showP ? "▲ 접기" : "▼ 성향 설정"}
+                      </button>
+                    </div>
+                    <PBadges personality={group.commander.personality} />
+                    {group.commander.showP && (
+                      <div className="pt-2 border-t border-gray-700">
+                        {P_AXES.map((ax, i) => (
+                          <PSlider key={i} axis={ax} value={group.commander.personality[i]}
+                            onChange={v => updateGroupCmdr(group.id, { personality: group.commander.personality.map((x, j) => j === i ? v : x) })} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* 하위 제대 */}
             {cmdr && subs.map(sub => {
               const au = AUTONOMY[sub.autonomy];
@@ -463,6 +598,28 @@ export default function App() {
                     </div>
                     <button onClick={() => removeSub(sub.id)} className="text-gray-600 hover:text-red-500 text-xl">×</button>
                   </div>
+                  {/* 소속 집단군 + 역할 */}
+                  {groups.length > 0 && (
+                    <div className="flex items-center gap-2 mb-3 flex-wrap">
+                      <select value={sub.groupId ?? ""}
+                        onChange={e => updateSub(sub.id, { groupId: e.target.value || null, role: null })}
+                        className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-gray-300 text-xs focus:outline-none focus:border-purple-500 flex-1">
+                        <option value="">소속 없음</option>
+                        {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </select>
+                      {sub.groupId && (
+                        <div className="flex gap-1">
+                          {Object.entries(ROLES).map(([r, cfg]) => (
+                            <button key={r}
+                              onClick={() => updateSub(sub.id, { role: sub.role === r ? null : r })}
+                              className={`text-xs px-2 py-0.5 rounded border transition-colors ${sub.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
+                              {cfg.icon} {r}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="flex gap-1 mb-2">
                     {Object.entries(AUTONOMY).map(([key, a]) => (
                       <button key={key} onClick={() => updateSub(sub.id, { autonomy: key })}
@@ -493,11 +650,11 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* 전황 기록 */}
+                  {/* 전력 현황 */}
                   <div className="mt-3 pt-3 border-t border-gray-700">
                     <button onClick={() => updateSub(sub.id, { showStatus: !sub.showStatus })}
                       className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                      {sub.showStatus ? "▲ 전황 기록 접기" : "▼ 전황 기록"}
+                      {sub.showStatus ? "▲ 전력 현황 접기" : "▼ 전력 현황"}
                     </button>
                     {sub.showStatus && (
                       <div className="mt-3 space-y-3">
@@ -623,36 +780,80 @@ export default function App() {
         {tab === "oob" && cmdr && (
           <div>
             {(() => {
-              const COL_W  = 192;
-              const CMDR_W = 220;
-              const subsW  = subs.length * COL_W;
-              const treeW  = subs.length > 0 ? Math.max(subsW + 40, CMDR_W + 40) : CMDR_W + 40;
+              const COL_W   = 192;
+              const GRP_W   = 200;
+              const CMDR_W  = 220;
+              const LINE    = "#4B5563";
+              const ungrouped = subs.filter(s => !s.groupId);
+              // 전체 폭 계산
+              const groupCols = groups.reduce((acc, g) => acc + Math.max(1, subs.filter(s => s.groupId === g.id).length), 0);
+              const totalCols = groupCols + ungrouped.length;
+              const treeW = Math.max(totalCols * COL_W + 40, CMDR_W + 40);
               return (
                 <div style={{ overflowX: "auto" }}>
                   <div style={{ width: treeW, margin: "0 auto", paddingBottom: 24 }}>
+                    {/* 총사령관 */}
                     <div style={{ display: "flex", justifyContent: "center" }}>
                       <OOBCommanderNode cmdr={cmdr} cmdrNextReview={cmdrNextReview} turn={turn} />
                     </div>
-                    {subs.length > 0 && (
+                    {(groups.length > 0 || subs.length > 0) && (
                       <div style={{ display: "flex", justifyContent: "center" }}>
-                        <div style={{ width: 2, height: 28, background: "#4B5563" }} />
+                        <div style={{ width: 2, height: 24, background: LINE }} />
                       </div>
                     )}
-                    {subs.length > 0 && (
-                      <div style={{ position: "relative", width: subsW, margin: "0 auto" }}>
-                        {subs.length > 1 && (
-                          <div style={{ position: "absolute", top: 0, height: 2, background: "#4B5563", left: COL_W/2, right: COL_W/2 }} />
-                        )}
-                        <div style={{ display: "flex" }}>
-                          {subs.map(sub => (
-                            <div key={sub.id} style={{ flex: `0 0 ${COL_W}px`, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                              <div style={{ width: 2, height: 28, background: "#4B5563" }} />
-                              <OOBSubNode sub={sub} turn={turn} />
+                    {/* 집단군 + 소속 없는 제대 가로 배치 */}
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-start", gap: 0 }}>
+                      {groups.map(group => {
+                        const groupSubs = subs.filter(s => s.groupId === group.id);
+                        const gCols     = Math.max(1, groupSubs.length);
+                        const gWidth    = gCols * COL_W;
+                        const roleCfg   = group.role ? ROLES[group.role] : null;
+                        return (
+                          <div key={group.id} style={{ width: gWidth, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                            {/* 집단군 노드 */}
+                            <div className={`bg-gray-800 border-2 border-purple-700 rounded-xl p-3 text-center`} style={{ width: Math.min(GRP_W, gWidth - 8) }}>
+                              <div className="text-purple-400 text-sm font-bold">◈ {group.name}</div>
+                              {roleCfg && (
+                                <div className={`mt-1 text-xs px-1.5 py-0.5 rounded inline-block border ${roleCfg.tagCls} ${roleCfg.border}`}>
+                                  {roleCfg.icon} {group.role}
+                                </div>
+                              )}
+                              {group.commander.directive && (
+                                <div className={`mt-1 text-xs px-1.5 py-0.5 rounded inline-block ${group.commander.directive.tag}`}>
+                                  {group.commander.directive.icon} {group.commander.directive.name}
+                                </div>
+                              )}
+                              <div className="mt-1"><PBadges personality={group.commander.personality} /></div>
                             </div>
-                          ))}
+                            {/* 수직선 */}
+                            <div style={{ width: 2, height: 20, background: LINE }} />
+                            {/* 예하 제대 */}
+                            {groupSubs.length > 0 && (
+                              <div style={{ position: "relative", width: gCols * COL_W }}>
+                                {groupSubs.length > 1 && (
+                                  <div style={{ position: "absolute", top: 0, height: 2, background: LINE, left: COL_W/2, right: COL_W/2 }} />
+                                )}
+                                <div style={{ display: "flex" }}>
+                                  {groupSubs.map(sub => (
+                                    <div key={sub.id} style={{ flex: `0 0 ${COL_W}px`, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                                      <div style={{ width: 2, height: 20, background: LINE }} />
+                                      <OOBSubNode sub={sub} turn={turn} />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {/* 소속 없는 제대 */}
+                      {ungrouped.map(sub => (
+                        <div key={sub.id} style={{ flex: `0 0 ${COL_W}px`, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                          <div style={{ width: 2, height: groups.length > 0 ? 44 : 24, background: LINE }} />
+                          <OOBSubNode sub={sub} turn={turn} />
                         </div>
-                      </div>
-                    )}
+                      ))}
+                    </div>
                   </div>
                 </div>
               );
@@ -738,17 +939,146 @@ export default function App() {
               {cmdr?.directive && <DirectiveCard directive={cmdr.directive} />}
             </div>
 
-            {subs.map(sub => {
+            {/* 집단군별 사령관 카드 + 예하 제대 */}
+            {groups.map(group => {
+              const roleCfg = group.role ? ROLES[group.role] : null;
+              const groupSubs = subs.filter(s => s.groupId === group.id);
+              return (
+                <div key={group.id}>
+                  {/* 집단군 사령관 카드 */}
+                  <div className="bg-gray-800 border border-purple-700 rounded-xl p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-purple-300 font-bold text-sm">◈ {group.name}</span>
+                        {roleCfg && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded border ${roleCfg.tagCls} ${roleCfg.border}`}>
+                            {roleCfg.icon} {group.role}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <PBadges personality={group.commander.personality} />
+                    <button onClick={() => updateGroupCmdr(group.id, { showS: !group.commander.showS })}
+                      className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                      {group.commander.showS ? "▲ 구역 전황 접기" : "▼ 구역 전황 입력"}
+                    </button>
+                    {group.commander.showS && (
+                      <div className="pt-2 border-t border-gray-700">
+                        {S_FACTORS.map((f, i) => (
+                          <SSlider key={i} factor={f} value={group.commander.situation[i]}
+                            onChange={v => updateGroupCmdr(group.id, { situation: group.commander.situation.map((x, j) => j === i ? v : x) })} />
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => genGroupDirective(group)}
+                      disabled={!cmdr?.directive}
+                      className="w-full bg-purple-900 hover:bg-purple-800 disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded text-sm font-semibold transition-colors">
+                      {!cmdr?.directive ? "총사령관 지시 먼저 생성" : "◈ 집단군 지시 생성"}
+                    </button>
+                    {group.commander.directive && (
+                      <DirectiveCard directive={group.commander.directive} />
+                    )}
+                  </div>
+                  {/* 집단군 예하 제대 */}
+                  {groupSubs.map(sub => {
+                    const au    = AUTONOMY[sub.autonomy];
+                    const cycle = getCycle(sub.personality[5]);
+                    const rb    = reviewBadge(sub.nextReview);
+                    const isDue = sub.nextReview !== null && turn >= sub.nextReview;
+                    const subRole = sub.role ? ROLES[sub.role] : null;
+                    const needsGroupDirective = sub.groupId && !group.commander.directive;
+                    return (
+                      <div key={sub.id} className={`bg-gray-800 border rounded-xl p-4 ml-4 mt-2 ${isDue ? "border-red-700" : subRole ? subRole.border : au.cardBorder}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-gray-100">{sub.name}</span>
+                            <span className="text-gray-600 text-sm">/ {sub.sector}</span>
+                            {subRole && (
+                              <span className={`text-xs px-1.5 py-0.5 rounded border ${subRole.tagCls} ${subRole.border}`}>
+                                {subRole.icon} {sub.role}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {rb && <span className={`text-xs px-1.5 py-0.5 rounded ${rb.color} ${rb.bgCls}`}>{rb.label}</span>}
+                            <span className={`text-xs ${cycle.color}`}>{cycle.label}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${au.tagCls}`}>{au.name}</span>
+                            {sub.effectiveAutonomy && sub.effectiveAutonomy !== sub.autonomy && (
+                              <span className={`text-xs px-1.5 py-0.5 rounded border ${AUTONOMY[sub.effectiveAutonomy].tagCls}`}>
+                                → {AUTONOMY[sub.effectiveAutonomy].name}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <PBadges personality={sub.personality} />
+                        {(sub.sp > 0 || (sub.units ?? []).length > 0) && (
+                          <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
+                            <span className="text-gray-500">전력</span>
+                            <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{sub.sp ?? 0}</span></span>
+                            <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(sub.units ?? []).reduce((sum, u) => sum + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
+                            {(sub.units ?? []).filter(u => !u.supplied).length > 0 && (
+                              <span className="text-red-400 font-bold">⚠ 미보급 {(sub.units ?? []).filter(u => !u.supplied).length}</span>
+                            )}
+                          </div>
+                        )}
+                        <button onClick={() => updateSub(sub.id, { showS: !sub.showS })}
+                          className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
+                          {sub.showS ? "▲ 구역 전황 접기" : "▼ 구역 전황 입력"}
+                        </button>
+                        {sub.showS && (
+                          <div className="mt-3 pt-3 border-t border-gray-700">
+                            {S_FACTORS.map((f, i) => (
+                              <SSlider key={i} factor={f} value={sub.situation[i]}
+                                onChange={v => updateSub(sub.id, { situation: sub.situation.map((x, j) => j === i ? v : x) })} />
+                            ))}
+                          </div>
+                        )}
+                        <button onClick={() => genTactics(sub)}
+                          disabled={!cmdr?.directive || needsGroupDirective}
+                          className={`mt-3 w-full disabled:opacity-30 py-2 rounded text-sm font-semibold transition-colors
+                            ${isDue ? "bg-red-900 hover:bg-red-800 border border-red-700 text-red-200" : "bg-gray-700 hover:bg-gray-600"}`}>
+                          {!cmdr?.directive ? "총사령관 지시 먼저 생성"
+                            : needsGroupDirective ? "집단군 지시 먼저 생성"
+                            : isDue ? "⚠ 재검토 시점 — 전술 방침 갱신"
+                            : "⚙ 전술 방침 생성"}
+                        </button>
+                        <ConflictBadge conflict={sub.conflict} autonomy={sub.effectiveAutonomy ?? sub.autonomy}
+                          onQuickOracle={() => quickOracle(sub.id, sub.name)} />
+                        {sub.quickOracleResult && (
+                          <div className={`mt-2 text-sm font-bold ${sub.quickOracleResult.startsWith("예") ? "text-green-400" : "text-red-400"}`}>
+                            오라클: {sub.quickOracleResult}
+                            <span className="text-gray-600 font-normal ml-2 text-xs">
+                              {sub.quickOracleResult.startsWith("예") ? "→ 독자 행동" : "→ 지시 복귀"}
+                            </span>
+                          </div>
+                        )}
+                        <TacticsGrid tactics={sub.tactics} />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            {/* 소속 없는 제대 */}
+            {subs.filter(s => !s.groupId).map(sub => {
               const au    = AUTONOMY[sub.autonomy];
               const cycle = getCycle(sub.personality[5]);
               const rb    = reviewBadge(sub.nextReview);
               const isDue = sub.nextReview !== null && turn >= sub.nextReview;
+              const subRole = sub.role ? ROLES[sub.role] : null;
               return (
-                <div key={sub.id} className={`bg-gray-800 border rounded-xl p-4 ${isDue ? "border-red-700" : au.cardBorder}`}>
+                <div key={sub.id} className={`bg-gray-800 border rounded-xl p-4 ${isDue ? "border-red-700" : subRole ? subRole.border : au.cardBorder}`}>
                   <div className="flex items-center justify-between mb-2">
-                    <div>
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-gray-100">{sub.name}</span>
-                      <span className="text-gray-600 text-sm ml-2">/ {sub.sector}</span>
+                      <span className="text-gray-600 text-sm">/ {sub.sector}</span>
+                      {subRole && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded border ${subRole.tagCls} ${subRole.border}`}>
+                          {subRole.icon} {sub.role}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap justify-end">
                       {rb && (
@@ -756,7 +1086,6 @@ export default function App() {
                       )}
                       <span className={`text-xs ${cycle.color}`}>{cycle.label}</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded ${au.tagCls}`}>{au.name}</span>
-                      {/* 실효 자율성 — 실제 유형과 다를 때만 표시 */}
                       {sub.effectiveAutonomy && sub.effectiveAutonomy !== sub.autonomy && (
                         <span className={`text-xs px-1.5 py-0.5 rounded border ${AUTONOMY[sub.effectiveAutonomy].tagCls}`}>
                           → {AUTONOMY[sub.effectiveAutonomy].name}
@@ -765,12 +1094,12 @@ export default function App() {
                     </div>
                   </div>
                   <PBadges personality={sub.personality} />
-                  {/* 전황 요약 (읽기 전용) */}
+                  {/* 전력 현황 요약 (읽기 전용) */}
                   {(sub.sp > 0 || (sub.units ?? []).length > 0) && (
                     <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
-                      <span className="text-gray-500">전황</span>
+                      <span className="text-gray-500">전력</span>
                       <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{sub.sp ?? 0}</span></span>
-                      <span className="text-gray-400">유닛 <span className="text-gray-200 font-bold">{(sub.units ?? []).length}개</span></span>
+                      <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(sub.units ?? []).reduce((sum, u) => sum + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
                       {(sub.units ?? []).filter(u => !u.supplied).length > 0 && (
                         <span className="text-red-400 font-bold">⚠ 미보급 {(sub.units ?? []).filter(u => !u.supplied).length}</span>
                       )}
@@ -810,6 +1139,26 @@ export default function App() {
                 </div>
               );
             })}
+
+            {/* SP 재배치 건의 */}
+            {(() => {
+              const suggestions = checkSpRedistribution(subs);
+              if (suggestions.length === 0) return null;
+              return (
+                <div className="bg-yellow-950 border border-yellow-700 rounded-xl p-4 space-y-2">
+                  <div className="text-yellow-400 font-bold text-sm">📦 보급 재배치 건의</div>
+                  {suggestions.map((s, i) => (
+                    <div key={i} className="text-xs text-yellow-200">
+                      <span className="text-green-400 font-semibold">{s.fromName}</span>
+                      <span className="text-yellow-600"> SP {s.fromSp} (여유) → </span>
+                      <span className="text-red-400 font-semibold">{s.toName}</span>
+                      <span className="text-yellow-600"> SP {s.toSp} (부족)</span>
+                      <span className="text-yellow-500 ml-1">— 예비대 SP 전방 이송 검토</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -907,7 +1256,7 @@ export default function App() {
                               {(s.sp > 0 || (s.units ?? []).length > 0) && (
                                 <div className="flex items-center gap-3 text-xs text-gray-600 mb-2">
                                   <span>SP <span className="text-gray-400">{s.sp ?? 0}</span></span>
-                                  <span>유닛 <span className="text-gray-400">{(s.units ?? []).length}개</span></span>
+                                  <span>전력 <span className="text-gray-400">{(s.units ?? []).reduce((sum, u) => sum + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}스텝</span></span>
                                   {unsupplied > 0 && <span className="text-red-500">⚠ 미보급 {unsupplied}</span>}
                                 </div>
                               )}
@@ -1034,6 +1383,14 @@ export default function App() {
                     : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"}`}>
                 ⚔ 전투 기록
               </button>
+              <button onClick={() => setLogInputMode("barrage")}
+                disabled={!started}
+                className={`flex-1 text-sm py-2 rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed
+                  ${logInputMode === "barrage"
+                    ? "bg-red-900 border-red-700 text-red-200"
+                    : "bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300"}`}>
+                💥 포격/폭격
+              </button>
             </div>
 
             {/* ── 메모 입력 ── */}
@@ -1049,6 +1406,60 @@ export default function App() {
                 <button onClick={addMemo} disabled={!memoInput.trim()}
                   className="text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-40 border border-gray-600 px-3 py-1.5 rounded transition-colors whitespace-nowrap">
                   📝 추가
+                </button>
+              </div>
+            )}
+
+            {/* ── 포격/폭격 기록 입력 ── */}
+            {logInputMode === "barrage" && (
+              <div className="bg-gray-800 border border-red-900 rounded-xl p-4 space-y-3">
+                {/* 포격/폭격 선택 */}
+                <div className="flex gap-2">
+                  {["포격", "폭격"].map(t => (
+                    <button key={t} onClick={() => setBarrageType(t)}
+                      className={`flex-1 py-2 rounded border text-sm transition-colors
+                        ${barrageType === t
+                          ? "bg-red-900 border-red-700 text-red-200"
+                          : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                      {t === "포격" ? "💣 포격" : "✈ 폭격"}
+                    </button>
+                  ))}
+                </div>
+                {/* 대상 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">대상</div>
+                  <input
+                    value={barrageTarget}
+                    onChange={e => setBarrageTarget(e.target.value)}
+                    placeholder="예: 3Pz HQ, 적 보급 집적소"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-red-500"
+                  />
+                </div>
+                {/* 위치 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">위치</div>
+                  <input
+                    value={barrageLocation}
+                    onChange={e => setBarrageLocation(e.target.value)}
+                    placeholder="예: hex 1234, 스탈린그라드 북부"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-red-500"
+                  />
+                </div>
+                {/* 결과 */}
+                <div>
+                  <div className="text-gray-500 text-xs mb-1.5">결과</div>
+                  <input
+                    value={barrageResult}
+                    onChange={e => setBarrageResult(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addBarrage()}
+                    placeholder="예: DG, 1스텝 손실, 효과 없음"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-red-500"
+                  />
+                </div>
+                <button onClick={addBarrage}
+                  disabled={!barrageTarget.trim() && !barrageLocation.trim()}
+                  className="w-full bg-red-900 hover:bg-red-800 disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded font-bold text-sm transition-colors">
+                  💥 기록 추가
                 </button>
               </div>
             )}
@@ -1077,9 +1488,10 @@ export default function App() {
                 {/* 참가 유닛 선택 */}
                 {battleSubId && (() => {
                   const subUnits = subs.find(s => s.id === battleSubId)?.units ?? [];
+                  const selectedUnits = subUnits.filter(u => battleUnitIds.includes(u.id));
                   return (
-                    <div>
-                      <div className="text-gray-500 text-xs mb-1.5">참가 유닛 <span className="text-gray-700">(선택 안 하면 제대 전체)</span></div>
+                    <div className="space-y-2">
+                      <div className="text-gray-500 text-xs">참가 유닛 <span className="text-gray-700">(선택 안 하면 제대 전체)</span></div>
                       {subUnits.length === 0
                         ? <div className="text-gray-700 text-xs">등록된 유닛 없음</div>
                         : (
@@ -1093,13 +1505,36 @@ export default function App() {
                                 {battleUnitIds.includes(u.id) && <span>✓</span>}
                                 {u.name || "(이름 없음)"}
                                 <span className={`opacity-60 ${!u.supplied ? "text-red-400" : ""}`}>
-                                  {u.steps}스텝{!u.supplied ? " ⚠" : ""}
+                                  {u.singleStep ? 1 : u.steps}스텝{!u.supplied ? " ⚠" : ""}
                                 </span>
                               </button>
                             ))}
                           </div>
                         )
                       }
+                      {/* 선택된 유닛 — 전투 후 스텝 입력 */}
+                      {selectedUnits.length > 0 && (
+                        <div className="space-y-1 pt-1">
+                          <div className="text-gray-600 text-xs">전투 후 스텝 <span className="text-gray-700">(미입력 시 변경 없음)</span></div>
+                          {selectedUnits.map(u => {
+                            const curSteps = u.singleStep ? 1 : (u.steps ?? 0);
+                            return (
+                              <div key={u.id} className="flex items-center gap-2 bg-gray-700 rounded px-2 py-1">
+                                <span className="text-xs text-gray-300 flex-1 truncate">{u.name || "(이름 없음)"}</span>
+                                <span className="text-xs text-gray-500">{curSteps}스텝 →</span>
+                                <input
+                                  type="number" min={0} max={curSteps}
+                                  value={battleUnitSteps[u.id] ?? ""}
+                                  onChange={e => setBattleUnitSteps(prev => ({ ...prev, [u.id]: e.target.value }))}
+                                  placeholder="?"
+                                  className="bg-gray-600 border border-gray-500 rounded px-1.5 py-0.5 text-orange-200 text-xs w-14 text-center focus:outline-none focus:border-orange-400"
+                                />
+                                <span className="text-xs text-gray-500">스텝</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -1160,7 +1595,33 @@ export default function App() {
               : (
                 <div className="space-y-2">
                   {log.map(e => {
-                    const icons = { phase: "📅", directive: "📋", tactics: "⚙", oracle: "🔮", memo: "📝", battle: "⚔" };
+                    const icons = { phase: "📅", directive: "📋", tactics: "⚙", oracle: "🔮", memo: "📝", battle: "⚔", barrage: "💥" };
+
+                    /* 포격/폭격 기록 전용 렌더링 */
+                    if (e.type === "barrage") {
+                      return (
+                        <div key={e.id} className="bg-gray-800 rounded-lg p-3 border-l-2 border-red-800">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm">
+                                <span className="text-red-400 font-bold">{e.barType === "폭격" ? "✈" : "💣"} {e.barType}</span>
+                                {e.target && <span className="ml-2 text-gray-200 font-semibold">{e.target}</span>}
+                              </div>
+                              {e.location && (
+                                <div className="text-xs text-gray-500 mt-0.5">📍 {e.location}</div>
+                              )}
+                              {e.result && (
+                                <div className="text-xs text-amber-400 mt-0.5 font-semibold">→ {e.result}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {e.turn != null && <span className="text-gray-600 text-xs font-mono">T{e.turn}</span>}
+                              <span className="text-gray-700 text-xs">{e.time}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
 
                     /* 전투 기록 전용 렌더링 */
                     if (e.type === "battle") {

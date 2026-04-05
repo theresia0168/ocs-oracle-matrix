@@ -2,6 +2,12 @@ import { AUTONOMY } from '../constants.js';
 import { getCycle, getCmdrCycle } from '../logic.js';
 import { PBadges }   from './PBadges.jsx';
 
+const ROLES = {
+  주공:  { tagCls: "bg-red-900 text-red-300",    border: "border-red-700",   icon: "⚡" },
+  조공:  { tagCls: "bg-blue-900 text-blue-300",  border: "border-blue-700",  icon: "↗"  },
+  예비대: { tagCls: "bg-green-900 text-green-300", border: "border-green-700", icon: "⛺" },
+};
+
 // ── 재검토 뱃지 계산 헬퍼 ─────────────────────────────────────
 function calcBadge(nextReview, turn, cycleColor) {
   if (nextReview === null) return null;
@@ -54,6 +60,11 @@ export function OOBSubNode({ sub, turn }) {
         </div>
       )}
       <div className={`mt-1.5 text-xs px-1.5 py-0.5 rounded inline-block ${au.tagCls}`}>{au.name}</div>
+      {sub.role && ROLES[sub.role] && (
+        <div className={`mt-1 text-xs px-1.5 py-0.5 rounded inline-block border ${ROLES[sub.role].tagCls} ${ROLES[sub.role].border}`}>
+          {ROLES[sub.role].icon} {sub.role}
+        </div>
+      )}
       {sub.conflict && sub.conflict.level !== "none" && (
         <div className={`text-xs mt-1 ${sub.conflict.level === "strong" ? "text-red-400" : "text-yellow-400"}`}>
           {sub.conflict.level === "strong" ? "⚠ 강충돌" : "△ 약충돌"}
