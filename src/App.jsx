@@ -173,7 +173,7 @@ export default function App() {
   // ── 제대 전황 기록 (SP / 유닛) ───────────────────────────────
   const updateSubSp   = (id, sp)                 => updateSub(id, { sp });
   const addSubUnit    = (id)                     => setSubs(ss => ss.map(s => s.id === id
-    ? { ...s, units: [...(s.units ?? []), { id: uid(), name: "", steps: 3, supplied: true }] }
+    ? { ...s, units: [...(s.units ?? []), { id: uid(), name: "", steps: 3, supplied: true, singleStep: false }] }
     : s));
   const removeSubUnit = (subId, unitId)          => setSubs(ss => ss.map(s => s.id === subId
     ? { ...s, units: s.units.filter(u => u.id !== unitId) }
@@ -181,6 +181,15 @@ export default function App() {
   const updateSubUnit = (subId, unitId, patch)   => setSubs(ss => ss.map(s => s.id === subId
     ? { ...s, units: s.units.map(u => u.id === unitId ? { ...u, ...patch } : u) }
     : s));
+  const moveSubUnit   = (fromSubId, unitId, toSubId) => setSubs(ss => {
+    const unit = ss.find(s => s.id === fromSubId)?.units?.find(u => u.id === unitId);
+    if (!unit) return ss;
+    return ss.map(s => {
+      if (s.id === fromSubId) return { ...s, units: s.units.filter(u => u.id !== unitId) };
+      if (s.id === toSubId)   return { ...s, units: [...(s.units ?? []), unit] };
+      return s;
+    });
+  });
 
   // ── 계획 단계 ─────────────────────────────────────────────
   const startPhase = () => {
@@ -512,8 +521,10 @@ export default function App() {
                               {/* 헤더 */}
                               <div className="flex items-center gap-2 text-gray-600 text-xs px-1">
                                 <span className="flex-1">유닛명</span>
+                                <span className="w-10 text-center" title="단일 스텝">단스텝</span>
                                 <span className="w-16 text-center">현재 스텝</span>
                                 <span className="w-12 text-center">보급</span>
+                                {subs.length > 1 && <span className="w-16 text-center">이속</span>}
                                 <span className="w-6" />
                               </div>
                               {(sub.units ?? []).map(u => (
@@ -525,11 +536,23 @@ export default function App() {
                                     onChange={e => updateSubUnit(sub.id, u.id, { name: e.target.value })}
                                     className="bg-transparent border-b border-gray-700 text-gray-100 text-sm flex-1 min-w-0 focus:outline-none focus:border-amber-400"
                                   />
+                                  {/* 단일 스텝 체크박스 */}
+                                  <div className="flex items-center justify-center w-10">
+                                    <input
+                                      type="checkbox"
+                                      checked={u.singleStep ?? false}
+                                      onChange={e => updateSubUnit(sub.id, u.id, { singleStep: e.target.checked, steps: e.target.checked ? 1 : u.steps })}
+                                      className="accent-amber-500 w-4 h-4"
+                                      title="단일 스텝 유닛"
+                                    />
+                                  </div>
+                                  {/* 현재 스텝 */}
                                   <input
-                                    type="number" min={0} max={9}
-                                    value={u.steps}
+                                    type="number" min={1} max={9}
+                                    value={u.singleStep ? 1 : u.steps}
+                                    disabled={u.singleStep ?? false}
                                     onChange={e => updateSubUnit(sub.id, u.id, { steps: Number(e.target.value) })}
-                                    className="bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5 text-gray-100 text-sm w-16 text-center focus:outline-none focus:border-amber-500"
+                                    className={`border border-gray-600 rounded px-1.5 py-0.5 text-sm w-16 text-center focus:outline-none focus:border-amber-500 ${(u.singleStep ?? false) ? "bg-gray-700 text-gray-500 cursor-not-allowed" : "bg-gray-800 text-gray-100"}`}
                                   />
                                   <div className="flex items-center gap-1.5 w-12 justify-center">
                                     <input
@@ -542,6 +565,20 @@ export default function App() {
                                       {u.supplied ? "○" : "✕"}
                                     </span>
                                   </div>
+                                  {/* 이속 셀렉트 */}
+                                  {subs.length > 1 && (
+                                    <select
+                                      value=""
+                                      onChange={e => { if (e.target.value) moveSubUnit(sub.id, u.id, e.target.value); }}
+                                      className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-gray-400 text-xs focus:outline-none focus:border-amber-500 w-16"
+                                      title="다른 제대로 이속"
+                                    >
+                                      <option value="">이속▾</option>
+                                      {subs.filter(s => s.id !== sub.id).map(s => (
+                                        <option key={s.id} value={s.id}>{s.name}</option>
+                                      ))}
+                                    </select>
+                                  )}
                                   <button
                                     onClick={() => removeSubUnit(sub.id, u.id)}
                                     className="text-gray-600 hover:text-red-400 text-base w-6 text-center transition-colors"
