@@ -275,4 +275,9 @@ export const calcConflict = (p, s, directiveId) => {
   return { level: score >= 3 ? "strong" : score >= 1 ? "weak" : "none", reasons };
 };
 
-// ── Question Matrix 조회 ───────────────────
+// ── Question Matrix 조회 ───────────────────────────────────────
+export const queryOracle = () => {
+  const row = rnd(0, Q_MATRIX.length - 1);
+  const col = rnd(0, Q_MATRIX[0].length - 1);
+  return Q_MATRIX[row][col];
+};
