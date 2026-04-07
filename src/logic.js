@@ -18,56 +18,73 @@ export const rollP = () => {
 export const uid   = () => Math.random().toString(36).slice(2, 9);
 export const pick  = (arr) => arr[rnd(0, arr.length - 1)];
 export const ts    = () => new Date().toLocaleTimeString("ko-KR", { hour:"2-digit", minute:"2-digit" });
-export const randAutonomy = () => pick(Object.keys(AUTONOMY));
+export const randAutonomy  = () => pick(Object.keys(AUTONOMY));
+export const rollAuthority = () => rnd(1, 7);
 
-// ── 초기 오브젝트 생성 ────────────────────────────────────────
-export const newCommander = () => ({
-  name: "총사령관",
-  personality: rollP(),
-  situation: Array(8).fill(4),
-  directive: null,
-  showP: false,
-  authority: 4,      // 지휘 권위 (1~7, 기본 중권위 4)
+// ── 야전군 (XXXXX) 초기 오브젝트 ────────────────────────────
+export const newFieldArmy = (idx) => ({
+  id: uid(),
+  name: `제${idx}야전군`,
+  commander: {
+    name: `제${idx}야전군 사령관`,
+    personality: rollP(),
+    situation:   Array(8).fill(4),
+    authority:   rollAuthority(),   // 랜덤 권위 (성향과 함께 설정)
+    directive:   null,
+    nextReview:  null,
+    showP: false,
+    showS: false,
+  },
 });
 
-export const newSub = (idx) => ({
+// ── 군 (XXXX) 초기 오브젝트 ─────────────────────────────────
+export const newArmy = (idx) => ({
   id: uid(),
   name: `제${idx}군`,
-  sector: "담당 구역",
+  sector: "목표 지역",
+  role: null,                  // "주공" | "조공" | "예비대" | null
   autonomy: randAutonomy(),
   personality: rollP(),
-  situation: Array(8).fill(4),
-  tactics: null,
-  conflict: null,
+  situation:   Array(8).fill(4),
+  authority:   rollAuthority(),  // 랜덤 권위 (군단에 영향)
+  directive:   null,
+  tactics:     null,
+  conflict:    null,
   quickOracleResult: null,
-  effectiveAutonomy: null, // 권위 적용 후 실효 자율성 (전술 생성 시 갱신)
-  nextReview: null,
+  effectiveAutonomy: null,
+  nextReview:  null,
   showP: false,
   showS: false,
   showStatus: false,
+  fieldArmyId: null,
   sp: 0,
   units: [],
-  groupId: null,           // 소속 집단군 id
-  role: null,              // "주공" | "조공" | "예비대" | null
 });
 
-export const newGroup = (idx) => ({
+// ── 군단 (XXX) 초기 오브젝트 ────────────────────────────────
+export const newCorps = (idx) => ({
   id: uid(),
-  name: `집단군 ${String.fromCharCode(64 + idx)}`,   // A, B, C …
-  commander: {
-    name: `집단군 ${String.fromCharCode(64 + idx)} 사령관`,
-    personality: rollP(),
-    situation: Array(8).fill(4),
-    showP: false,
-    showS: false,
-    directive: null,
-    nextReview: null,
-  },
-  role: null,   // 집단군 자체의 역할 (OKH 시각)
+  name: `제${idx}군단`,
+  sector: "목표 지역",
+  role: null,
+  autonomy: randAutonomy(),
+  personality: rollP(),
+  situation:   Array(8).fill(4),
+  // 군단은 권위 없음
+  tactics:     null,
+  conflict:    null,
+  quickOracleResult: null,
+  effectiveAutonomy: null,
+  nextReview:  null,
+  showP: false,
+  showS: false,
+  showStatus: false,
+  armyId: null,
+  sp: 0,
+  units: [],
 });
 
 // ── 지휘 권위 → 실효 자율성 변환 ─────────────────────────────
-// 명령복종형은 권위와 무관하게 항상 지시 집행
 // 고권위(6~7): independent→situational, situational→compliant
 // 저권위(1~2): situational→independent (compliant는 그대로)
 export const getEffectiveAutonomy = (autonomy, authority) => {
@@ -81,15 +98,14 @@ export const getEffectiveAutonomy = (autonomy, authority) => {
   return autonomy;
 };
 
-// ── 계획 주기 (1턴 = 반 주 ≈ 3~4일, 군단·군 단위 기준) ──────
+// ── 계획 주기 (군·군단 단위, 1턴 = 반주 ≈ 3~4일) ──────────
 export const getCycle = (adaptability) => {
   if (adaptability >= 6) return { turns: 2, label: "2턴·1주 재검토",  color: "text-red-400"    };
   if (adaptability >= 4) return { turns: 4, label: "4턴·2주 재검토",  color: "text-yellow-400" };
   return                        { turns: 6, label: "6턴·3주 재검토",  color: "text-green-400"  };
 };
 
-// ── 총사령관 전용 계획 주기 (하위 제대보다 한 단계 긴 주기) ──
-// 적응력 고(6~7): 4턴·2주 / 중(4~5): 6턴·3주 / 저(1~3): 8턴·4주
+// ── 야전군 사령관 계획 주기 (하위 제대보다 한 단계 긴 주기) ──
 export const getCmdrCycle = (adaptability) => {
   if (adaptability >= 6) return { turns: 4, label: "4턴·2주 재검토",  color: "text-yellow-400" };
   if (adaptability >= 4) return { turns: 6, label: "6턴·3주 재검토",  color: "text-green-400"  };
@@ -104,7 +120,7 @@ export const getFollowupTable = (answer) => {
   return null;
 };
 
-// ── 전략 지시 산출 ────────────────────────────────────────────
+// ── 야전군 전략 지시 산출 ─────────────────────────────────────
 export const calcDirective = (p, s) => {
   const scored = DIRECTIVES.map(d => {
     let sc = rnd(1, 6);
@@ -117,32 +133,38 @@ export const calcDirective = (p, s) => {
   return scored.sort((a, b) => b.score - a.score)[0];
 };
 
-// ── 집단군 지시 산출 (OKH 지시 + 집단군 역할 반영) ───────────────
-export const calcGroupDirective = (okhDirectiveId, groupRole, p, s) => {
+// ── 군 지시 산출 (야전군 지시 + 야전군 권위 + 군 역할 반영) ─────
+// 권위가 높을수록 야전군 지시 방향을 강하게 따름
+export const calcArmyDirective = (fieldArmyDirectiveId, fieldArmyAuthority, armyRole, p, s) => {
+  const authBonus =
+    fieldArmyAuthority >= 6 ? 4 :
+    fieldArmyAuthority >= 4 ? 2 :
+    fieldArmyAuthority >= 3 ? 1 : 0;
+
   const scored = DIRECTIVES.map(d => {
     let sc = rnd(1, 6);
     if (d.id === "full_offensive")  { sc += (p[2]-4)*1.5 + (4-p[1]) + (s[0]-4) + (4-s[1]) + (s[3]-4); if (s[6]>4) sc += 2; }
     if (d.id === "main_effort")     { sc += (p[0]-4)*1.5 + (p[7]-4) + (p[3]-4)*.5; if (s[7]>4) sc += 1; }
     if (d.id === "supply_priority") { sc += (p[4]-4)*1.5 + (p[6]-4) + (4-s[0])*1.5 + (4-s[3]); }
     if (d.id === "defensive")       { sc += (p[1]-4)*1.5 + (p[6]-4) + (s[1]-4)*1.5 + (4-s[4]) + (4-s[0])*.5; }
-    // OKH 지시 계승 (같은 방향이면 보너스)
+    // 야전군 지시 계승 — 권위에 비례한 보너스
     const offIds = ["full_offensive", "main_effort"];
     const defIds = ["supply_priority", "defensive"];
-    if (offIds.includes(okhDirectiveId) && offIds.includes(d.id)) sc += 2;
-    if (defIds.includes(okhDirectiveId) && defIds.includes(d.id)) sc += 2;
+    if (offIds.includes(fieldArmyDirectiveId) && offIds.includes(d.id)) sc += authBonus;
+    if (defIds.includes(fieldArmyDirectiveId) && defIds.includes(d.id)) sc += authBonus;
     // 역할 편향
-    if (groupRole === "주공") {
-      if (d.id === "full_offensive" || d.id === "main_effort") sc += 4;
-      if (d.id === "defensive"      || d.id === "supply_priority") sc -= 3;
+    if (armyRole === "주공") {
+      if (d.id === "full_offensive" || d.id === "main_effort")      sc += 4;
+      if (d.id === "defensive"      || d.id === "supply_priority")  sc -= 3;
     }
-    if (groupRole === "조공") {
+    if (armyRole === "조공") {
       if (d.id === "main_effort")    sc += 2;
       if (d.id === "full_offensive") sc -= 1;
     }
-    if (groupRole === "예비대") {
+    if (armyRole === "예비대") {
       if (d.id === "supply_priority") sc += 5;
       if (d.id === "defensive")       sc += 3;
-      if (d.id === "full_offensive" || d.id === "main_effort") sc -= 4;
+      if (d.id === "full_offensive"  || d.id === "main_effort") sc -= 4;
     }
     return { ...d, score: sc };
   });
@@ -150,18 +172,13 @@ export const calcGroupDirective = (okhDirectiveId, groupRole, p, s) => {
 };
 
 // ── 보급 재배치 건의 (예비대 SP 여유 → 주공 SP 부족) ─────────────
-const SP_EXCESS   = 3;  // 예비대 SP가 이 값 초과 시 여유 있음
-const SP_SHORTAGE = 2;  // 주공 SP가 이 값 미만 시 부족
-export const checkSpRedistribution = (subs) => {
+const SP_EXCESS   = 3;
+const SP_SHORTAGE = 2;
+export const checkSpRedistribution = (units) => {
   const suggestions = [];
-  subs.forEach(reserve => {
+  units.forEach(reserve => {
     if (reserve.role !== "예비대" || (reserve.sp ?? 0) <= SP_EXCESS) return;
-    const targets = subs.filter(s =>
-      s.role === "주공" &&
-      (reserve.groupId === null || s.groupId === reserve.groupId || s.groupId === null) &&
-      (s.sp ?? 0) < SP_SHORTAGE
-    );
-    targets.forEach(t => {
+    units.filter(s => s.role === "주공" && (s.sp ?? 0) < SP_SHORTAGE).forEach(t => {
       suggestions.push({
         fromId: reserve.id, fromName: reserve.name, fromSp: reserve.sp ?? 0,
         toId:   t.id,       toName:   t.name,       toSp:   t.sp ?? 0,
@@ -172,38 +189,35 @@ export const checkSpRedistribution = (subs) => {
 };
 
 // ── 전술 방침 산출 ────────────────────────────────────────────
-// role: "주공" | "조공" | "예비대" | null
 export const calcTactics = (directiveId, p, s, role = null) => {
-  // 역할별 공격 풀
-  const ATK_MAIN = [TACTICS.attack[1], TACTICS.attack[2], TACTICS.attack[5]]; // 집중돌파·포위·기만
-  const ATK_SUP  = [TACTICS.attack[0], TACTICS.attack[4]];                    // 정면압박·제한목표
+  const ATK_MAIN = [TACTICS.attack[1], TACTICS.attack[2], TACTICS.attack[5]];
+  const ATK_SUP  = [TACTICS.attack[0], TACTICS.attack[4]];
 
   let shouldAtt, attackPool, supplyVal, movementPool;
 
   if (role === "주공") {
-    shouldAtt   = true;                                                   // 항상 공격
-    attackPool  = ATK_MAIN;
-    supplyVal   = pick([TACTICS.supply[0], TACTICS.supply[3]]);           // 공격적 소비 or 전방 집중
-    movementPool= [TACTICS.movement[0], TACTICS.movement[1]];            // 전투·속도 이동
+    shouldAtt    = true;
+    attackPool   = ATK_MAIN;
+    supplyVal    = pick([TACTICS.supply[0], TACTICS.supply[3]]);
+    movementPool = [TACTICS.movement[0], TACTICS.movement[1]];
   } else if (role === "조공") {
     const isOffDir = directiveId === "full_offensive" || directiveId === "main_effort";
     const offP     = p[2] >= 5 && s[0] >= 4;
-    shouldAtt   = isOffDir || offP;
-    attackPool  = ATK_SUP;                                                // 제한된 공격만
-    supplyVal   = directiveId === "supply_priority" ? TACTICS.supply[rnd(1,2)] : pick(TACTICS.supply);
-    movementPool= TACTICS.movement;
+    shouldAtt    = isOffDir || offP;
+    attackPool   = ATK_SUP;
+    supplyVal    = directiveId === "supply_priority" ? TACTICS.supply[rnd(1,2)] : pick(TACTICS.supply);
+    movementPool = TACTICS.movement;
   } else if (role === "예비대") {
-    shouldAtt   = false;                                                  // 공격 없음
-    supplyVal   = TACTICS.supply[2];                                      // SP 비축 고정
-    movementPool= [TACTICS.movement[2], TACTICS.movement[4]];            // 전략이동·집결기동
+    shouldAtt    = false;
+    supplyVal    = TACTICS.supply[2];
+    movementPool = [TACTICS.movement[2], TACTICS.movement[4]];
   } else {
-    // 역할 없음 — 기존 로직
     const isOffDir = directiveId === "full_offensive" || directiveId === "main_effort";
     const offP     = p[2] >= 5 && s[0] >= 4;
-    shouldAtt   = isOffDir || (directiveId !== "defensive" && directiveId !== "supply_priority" && offP);
-    attackPool  = TACTICS.attack;
-    supplyVal   = directiveId === "supply_priority" ? TACTICS.supply[rnd(1,2)] : pick(TACTICS.supply);
-    movementPool= TACTICS.movement;
+    shouldAtt    = isOffDir || (directiveId !== "defensive" && directiveId !== "supply_priority" && offP);
+    attackPool   = TACTICS.attack;
+    supplyVal    = directiveId === "supply_priority" ? TACTICS.supply[rnd(1,2)] : pick(TACTICS.supply);
+    movementPool = TACTICS.movement;
   }
 
   return {
@@ -247,7 +261,6 @@ export const calcTacticsIndependent = (p, s, role = null) => {
       target:   pick(TACTICS.target),
     };
   }
-  // 역할 없음 — 기존 로직
   const isOff = p[2] >= 5 && s[0] >= 4 && s[1] <= 4;
   return {
     attack:   isOff ? pick(TACTICS.attack)  : null,
