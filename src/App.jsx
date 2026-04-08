@@ -1193,6 +1193,16 @@ export default function App() {
                                 </>
                               )}
                               <TacticsGrid tactics={c.tactics} />
+                              {/* 군단 작계 메모 */}
+                              <div className="mt-2">
+                                <textarea
+                                  value={c.planMemo ?? ""}
+                                  onChange={e => updateCorps_(c.id, { planMemo: e.target.value })}
+                                  placeholder="작계 메모 — 전술 방침을 토대로 구체적인 기동 계획을 자유롭게 적어두세요"
+                                  rows={2}
+                                  className="w-full bg-gray-900 border border-gray-700 hover:border-gray-500 focus:border-amber-500 rounded px-2 py-1.5 text-gray-300 text-xs resize-y focus:outline-none placeholder-gray-600 transition-colors"
+                                />
+                              </div>
                             </div>
                           );
                         })}
@@ -1310,6 +1320,11 @@ export default function App() {
                                       ? <TacticsGrid tactics={c.tactics} />
                                       : <div className="text-gray-700 text-xs">전술 미생성</div>
                                     }
+                                    {c.planMemo && (
+                                      <div className="mt-2 px-2 py-1.5 bg-gray-900 border-l-2 border-gray-600 rounded-r text-xs text-gray-400 whitespace-pre-wrap">
+                                        {c.planMemo}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
