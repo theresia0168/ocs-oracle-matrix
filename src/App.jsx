@@ -52,11 +52,12 @@ function AuthorityBar({ authority, onChange }) {
 }
 
 // ── 전력현황 (SP + 유닛) UI ───────────────────────────────────
+// moveTargets: [{ value: "army:id" | "corps:id", name }]
 function StatusSection({
   id, sp, units, showStatus,
   onToggle, onSpChange,
   onAddUnit, onRemoveUnit, onUpdateUnit, onMoveUnit,
-  moveTargets,   // [{ id, name }] 이속 가능한 다른 제대
+  moveTargets,
 }) {
   return (
     <div className="mt-3 pt-3 border-t border-gray-700">
@@ -82,7 +83,7 @@ function StatusSection({
                   <span className="w-10 text-center">단스텝</span>
                   <span className="w-16 text-center">현재 스텝</span>
                   <span className="w-12 text-center">보급</span>
-                  {moveTargets?.length > 0 && <span className="w-16 text-center">이속</span>}
+                  {moveTargets?.length > 0 && <span className="w-20 text-center">이속</span>}
                   <span className="w-6" />
                 </div>
                 {(units ?? []).map(u => (
@@ -110,9 +111,9 @@ function StatusSection({
                     </div>
                     {moveTargets?.length > 0 && (
                       <select value="" onChange={e => { if (e.target.value) onMoveUnit(u.id, e.target.value); }}
-                        className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-gray-400 text-xs focus:outline-none focus:border-amber-500 w-16">
+                        className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-gray-400 text-xs focus:outline-none focus:border-amber-500 w-20">
                         <option value="">이속▾</option>
-                        {moveTargets.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        {moveTargets.map(t => <option key={t.value} value={t.value}>{t.name}</option>)}
                       </select>
                     )}
                     <button onClick={() => onRemoveUnit(u.id)}
@@ -129,6 +130,17 @@ function StatusSection({
         </div>
       )}
     </div>
+  );
+}
+
+// ── 접기 토글 버튼 헬퍼 ───────────────────────────────────────
+function CollapseBtn({ collapsed, onToggle, cls = "" }) {
+  return (
+    <button onClick={onToggle}
+      className={`text-gray-500 hover:text-gray-300 text-xs px-1.5 py-0.5 rounded border border-gray-700 hover:border-gray-500 transition-colors shrink-0 ${cls}`}
+      title={collapsed ? "펼치기" : "접기"}>
+      {collapsed ? "▶" : "▼"}
+    </button>
   );
 }
 
@@ -158,16 +170,24 @@ export default function App() {
   const [log, setLog] = useState([]);
   const [memoInput, setMemoInput]         = useState("");
   const [logInputMode, setLogInputMode]   = useState("memo");
-  const [battleSubId, setBattleSubId]     = useState("");
-  const [battleUnitIds, setBattleUnitIds] = useState([]);
-  const [battleUnitSteps, setBattleUnitSteps] = useState({});
+
+  // ── 전투 기록: 계층형 네비게이션 + 복수 제대 참가 ──────────
+  const [battleNavFaId,    setBattleNavFaId]    = useState("");
+  const [battleNavArmyId,  setBattleNavArmyId]  = useState("");
+  const [battleNavCorpsId, setBattleNavCorpsId] = useState(""); // "_direct" = 군 직할 유닛
+  const [battlePendingIds, setBattlePendingIds] = useState([]); // 현재 뷰에서 임시 선택
+  const [battleParticipants, setBattleParticipants] = useState([]); // 누적 참가 유닛
   const [battleSide, setBattleSide]       = useState("attack");
   const [battleResult, setBattleResult]   = useState("");
   const [battleNote, setBattleNote]       = useState("");
+
   const [barrageType, setBarrageType]     = useState("포격");
   const [barrageTarget, setBarrageTarget] = useState("");
   const [barrageLocation, setBarrageLocation] = useState("");
   const [barrageResult, setBarrageResult] = useState("");
+
+  // 작계 요약 탭 접기 상태 (faId → bool)
+  const [summaryFaCollapsed, setSummaryFaCollapsed] = useState({});
 
   // ── 재검토 긴박도 뱃지 ──────────────────────────────────────
   const reviewBadge = (nextReview) => {
@@ -180,7 +200,7 @@ export default function App() {
 
   // ── 세이브/로드 ────────────────────────────────────────────
   const fileInputRef = useRef(null);
-  const LS_KEY = "ocs-autosave-v3";  // v3: 3계층 구조
+  const LS_KEY = "ocs-autosave-v3";
 
   const collectState = () => ({
     gameName, phase, turn, fieldArmies, armies, corps, planHistory, log, started,
@@ -253,30 +273,7 @@ export default function App() {
     setMemoInput("");
   };
 
-  // ── 전투 기록 헬퍼 ────────────────────────────────────────
-  // 전투 기록 대상: 군(armies) + 군단(corps) 통합 목록
-  const allBattleUnits = () => [
-    ...armies.map(a => ({ ...a, _type: "army",  _label: `[군] ${a.name}` })),
-    ...corps.map(c  => ({ ...c, _type: "corps", _label: `[군단] ${c.name}` })),
-  ];
-
-  const toggleBattleUnit = (unitId) => {
-    setBattleUnitIds(ids =>
-      ids.includes(unitId) ? ids.filter(i => i !== unitId) : [...ids, unitId]
-    );
-    setBattleUnitSteps(prev => {
-      const next = { ...prev };
-      delete next[unitId];
-      return next;
-    });
-  };
-
-  const handleBattleSubChange = (id) => {
-    setBattleSubId(id);
-    setBattleUnitIds([]);
-    setBattleUnitSteps({});
-  };
-
+  // ── 포격 기록 ─────────────────────────────────────────────
   const addBarrage = () => {
     if (!barrageTarget.trim() && !barrageLocation.trim()) return;
     addLog({
@@ -288,40 +285,136 @@ export default function App() {
     setBarrageTarget(""); setBarrageLocation(""); setBarrageResult("");
   };
 
+  // ── 전투 기록: 계층 네비게이션 헬퍼 ──────────────────────────
+  // 현재 네비 선택에서 보여줄 유닛 목록
+  const battleCurrentUnits = () => {
+    if (!battleNavCorpsId) return [];
+    if (battleNavCorpsId === "_direct") {
+      const army = armies.find(a => a.id === battleNavArmyId);
+      return (army?.units ?? []).map(u => ({ ...u, _entityType: "army", _entityId: battleNavArmyId, _entityName: army?.name ?? "" }));
+    }
+    const c = corps.find(x => x.id === battleNavCorpsId);
+    return (c?.units ?? []).map(u => ({ ...u, _entityType: "corps", _entityId: battleNavCorpsId, _entityName: c?.name ?? "" }));
+  };
+
+  // 현재 뷰에서 선택된 유닛들을 참가 목록에 추가
+  const addBattleParticipants = () => {
+    if (battlePendingIds.length === 0) return;
+    const currentUnits = battleCurrentUnits();
+    const existingIds = new Set(battleParticipants.map(p => p.unitId));
+    const newPs = battlePendingIds
+      .map(uid_ => {
+        const u = currentUnits.find(x => x.id === uid_);
+        if (!u || existingIds.has(uid_)) return null;
+        return {
+          entityType: u._entityType,
+          entityId:   u._entityId,
+          entityName: u._entityName,
+          unitId:     uid_,
+          name:       u.name,
+          curSteps:   u.singleStep ? 1 : (u.steps ?? 0),
+          stepAfter:  "",
+        };
+      })
+      .filter(Boolean);
+    setBattleParticipants(ps => [...ps, ...newPs]);
+    setBattlePendingIds([]);
+  };
+
+  const removeBattleParticipant = (unitId) =>
+    setBattleParticipants(ps => ps.filter(p => p.unitId !== unitId));
+
+  const updateParticipantStep = (unitId, stepAfter) =>
+    setBattleParticipants(ps => ps.map(p => p.unitId === unitId ? { ...p, stepAfter } : p));
+
+  // 전투 결과 기록 + 스텝 적용
   const addBattle = () => {
-    if (!battleSubId || !battleResult.trim()) return;
-    const units_list = allBattleUnits();
-    const sub = units_list.find(s => s.id === battleSubId);
-    const picked = (sub?.units ?? []).filter(u => battleUnitIds.includes(u.id));
-    const unitLabels = picked.map(u => {
-      const after = battleUnitSteps[u.id];
-      if (after !== "" && after !== undefined) return `${u.name || "?"}(${u.singleStep ? 1 : u.steps}→${after}스텝)`;
-      return u.name || "?";
+    if (!battleResult.trim()) return;
+    const unitLabels = battleParticipants.map(p => {
+      if (p.stepAfter !== "" && p.stepAfter !== undefined)
+        return `${p.name || "?"}(${p.curSteps}→${p.stepAfter}스텝)`;
+      return p.name || "?";
     });
+    const entityNames = [...new Set(battleParticipants.map(p => p.entityName))].join(", ") || "미지정 제대";
     addLog({
       type: "battle",
-      label: `${sub?.name ?? "??"} — ${battleSide === "attack" ? "공격" : "방어"}`,
+      label: `${entityNames} — ${battleSide === "attack" ? "공격" : "방어"}`,
       detail: battleResult.trim(),
       units:  unitLabels,
       note:   battleNote.trim() || null,
     });
-    const stepsToApply = Object.entries(battleUnitSteps).filter(([, v]) => v !== "" && v !== undefined);
-    if (stepsToApply.length > 0 && sub) {
-      const applySteps = (list) => list.map(item => {
-        if (item.id !== battleSubId) return item;
-        return { ...item, units: item.units.map(u => {
-          const after = battleUnitSteps[u.id];
-          if (after !== "" && after !== undefined) return { ...u, steps: Number(after) };
-          return u;
-        })};
-      });
-      if (sub._type === "army")  setArmies(applySteps);
-      else                       setCorps(applySteps);
+
+    // 스텝 변경 적용 (군/군단 각각)
+    const armyStepMap  = {};  // armyId  -> { unitId -> afterSteps }
+    const corpsStepMap = {};  // corpsId -> { unitId -> afterSteps }
+    battleParticipants.forEach(p => {
+      if (p.stepAfter === "" || p.stepAfter === undefined) return;
+      if (p.entityType === "army") {
+        if (!armyStepMap[p.entityId])  armyStepMap[p.entityId]  = {};
+        armyStepMap[p.entityId][p.unitId]  = Number(p.stepAfter);
+      } else {
+        if (!corpsStepMap[p.entityId]) corpsStepMap[p.entityId] = {};
+        corpsStepMap[p.entityId][p.unitId] = Number(p.stepAfter);
+      }
+    });
+    if (Object.keys(armyStepMap).length > 0) {
+      setArmies(as => as.map(a => {
+        if (!armyStepMap[a.id]) return a;
+        return { ...a, units: (a.units ?? []).map(u =>
+          armyStepMap[a.id][u.id] !== undefined ? { ...u, steps: armyStepMap[a.id][u.id] } : u
+        )};
+      }));
     }
-    setBattleUnitIds([]);
-    setBattleUnitSteps({});
+    if (Object.keys(corpsStepMap).length > 0) {
+      setCorps(cs => cs.map(c => {
+        if (!corpsStepMap[c.id]) return c;
+        return { ...c, units: (c.units ?? []).map(u =>
+          corpsStepMap[c.id][u.id] !== undefined ? { ...u, steps: corpsStepMap[c.id][u.id] } : u
+        )};
+      }));
+    }
+
+    setBattleParticipants([]);
+    setBattlePendingIds([]);
     setBattleResult("");
     setBattleNote("");
+  };
+
+  // ── 통합 유닛 이속 (군/군단 어디서든 어디로든) ────────────────
+  // toValue 형식: "army:id" | "corps:id"
+  const moveUnit = (fromType, fromId, uId, toValue) => {
+    const [toType, toId] = toValue.split(":");
+    if (fromType === toType && fromId === toId) return;
+
+    // 유닛 객체 읽기
+    let unit = null;
+    if (fromType === "army") {
+      unit = armies.find(a => a.id === fromId)?.units?.find(u => u.id === uId);
+    } else {
+      unit = corps.find(c => c.id === fromId)?.units?.find(u => u.id === uId);
+    }
+    if (!unit) return;
+    const u = { ...unit };
+
+    if (fromType === "army" && toType === "army") {
+      setArmies(as => as.map(a => {
+        if (a.id === fromId) return { ...a, units: a.units.filter(x => x.id !== uId) };
+        if (a.id === toId)   return { ...a, units: [...(a.units ?? []), u] };
+        return a;
+      }));
+    } else if (fromType === "corps" && toType === "corps") {
+      setCorps(cs => cs.map(c => {
+        if (c.id === fromId) return { ...c, units: c.units.filter(x => x.id !== uId) };
+        if (c.id === toId)   return { ...c, units: [...(c.units ?? []), u] };
+        return c;
+      }));
+    } else if (fromType === "army" && toType === "corps") {
+      setArmies(as => as.map(a => a.id === fromId ? { ...a, units: a.units.filter(x => x.id !== uId) } : a));
+      setCorps(cs => cs.map(c => c.id === toId ? { ...c, units: [...(c.units ?? []), u] } : c));
+    } else { // corps -> army
+      setCorps(cs => cs.map(c => c.id === fromId ? { ...c, units: c.units.filter(x => x.id !== uId) } : c));
+      setArmies(as => as.map(a => a.id === toId ? { ...a, units: [...(a.units ?? []), u] } : a));
+    }
   };
 
   // ── 야전군 CRUD ───────────────────────────────────────────
@@ -347,22 +440,12 @@ export default function App() {
   const updateArmy = (id, patch) => setArmies(as => as.map(a => a.id === id ? { ...a, ...patch } : a));
   const rollArmyAll = (id) => updateArmy(id, { personality: rollP(), autonomy: randAutonomy(), authority: rollAuthority() });
 
-  // 군 유닛 관리
   const addArmyUnit    = (id) => setArmies(as => as.map(a => a.id === id
     ? { ...a, units: [...(a.units ?? []), { id: uid(), name: "", steps: 3, supplied: true, singleStep: false }] } : a));
   const removeArmyUnit = (aId, uId) => setArmies(as => as.map(a => a.id === aId
     ? { ...a, units: a.units.filter(u => u.id !== uId) } : a));
   const updateArmyUnit = (aId, uId, patch) => setArmies(as => as.map(a => a.id === aId
     ? { ...a, units: a.units.map(u => u.id === uId ? { ...u, ...patch } : u) } : a));
-  const moveArmyUnit   = (fromId, uId, toId) => setArmies(as => {
-    const unit = as.find(a => a.id === fromId)?.units?.find(u => u.id === uId);
-    if (!unit) return as;
-    return as.map(a => {
-      if (a.id === fromId) return { ...a, units: a.units.filter(u => u.id !== uId) };
-      if (a.id === toId)   return { ...a, units: [...(a.units ?? []), unit] };
-      return a;
-    });
-  });
 
   // ── 군단 CRUD ─────────────────────────────────────────────
   const addCorps_ = (armyId) =>
@@ -371,26 +454,25 @@ export default function App() {
   const updateCorps_ = (id, patch) => setCorps(cs => cs.map(c => c.id === id ? { ...c, ...patch } : c));
   const rollCorpsAll = (id) => updateCorps_(id, { personality: rollP(), autonomy: randAutonomy() });
 
-  // 군단 유닛 관리
   const addCorpsUnit    = (id) => setCorps(cs => cs.map(c => c.id === id
     ? { ...c, units: [...(c.units ?? []), { id: uid(), name: "", steps: 3, supplied: true, singleStep: false }] } : c));
   const removeCorpsUnit = (cId, uId) => setCorps(cs => cs.map(c => c.id === cId
     ? { ...c, units: c.units.filter(u => u.id !== uId) } : c));
   const updateCorpsUnit = (cId, uId, patch) => setCorps(cs => cs.map(c => c.id === cId
     ? { ...c, units: c.units.map(u => u.id === uId ? { ...u, ...patch } : u) } : c));
-  const moveCorpsUnit   = (fromId, uId, toId) => setCorps(cs => {
-    const unit = cs.find(c => c.id === fromId)?.units?.find(u => u.id === uId);
-    if (!unit) return cs;
-    return cs.map(c => {
-      if (c.id === fromId) return { ...c, units: c.units.filter(u => u.id !== uId) };
-      if (c.id === toId)   return { ...c, units: [...(c.units ?? []), unit] };
-      return c;
-    });
-  });
+
+  // 전체 이속 목표 목록 (군 + 군단 전부)
+  const allMoveTargets = (excludeType, excludeId) => [
+    ...armies
+      .filter(a => !(excludeType === "army" && a.id === excludeId))
+      .map(a => ({ value: `army:${a.id}`, name: `[군] ${a.name}` })),
+    ...corps
+      .filter(c => !(excludeType === "corps" && c.id === excludeId))
+      .map(c => ({ value: `corps:${c.id}`, name: `[군단] ${c.name}` })),
+  ];
 
   // ── 계획 단계 ─────────────────────────────────────────────
   const startPhase = () => {
-    // 재검토 주기 사전 계산
     const newFaReviews = {};
     fieldArmies.forEach(fa => {
       newFaReviews[fa.id] = turn + getCmdrCycle(fa.commander.personality[5]).turns;
@@ -414,7 +496,6 @@ export default function App() {
         : turn + getCycle(c.personality[5]).turns;
     });
 
-    // 계획 이력 저장
     if (fieldArmies.some(fa => fa.commander.directive)) {
       setPlanHistory(h => [{
         phase, time: ts(), turn,
@@ -437,7 +518,6 @@ export default function App() {
       }, ...h]);
     }
 
-    // 플롯 트위스트
     const triggered = rnd(1, 20) === 20;
     let plotR = null;
     let plotTargetIdx = -1;
@@ -448,7 +528,6 @@ export default function App() {
     setPlotResult(plotR);
     setPhase(p => p + 1);
 
-    // 야전군 리셋 + 플롯 트위스트 적용
     setFieldArmies(fas => fas.map((fa, i) => {
       let newP = fa.commander.personality;
       if (plotR && plotR.effect !== "tactic" && i === plotTargetIdx) {
@@ -483,7 +562,7 @@ export default function App() {
     addLog({ type: "directive", label: fa.commander.name, detail: d.name });
   };
 
-  // ── 군 지시 생성 (야전군 지시 + 야전군 권위 기반) ─────────
+  // ── 군 지시 생성 ──────────────────────────────────────────
   const genArmyDirective = (armyId) => {
     const army = armies.find(a => a.id === armyId);
     if (!army) return;
@@ -500,7 +579,7 @@ export default function App() {
     addLog({ type: "directive", label: army.name, detail: d.name });
   };
 
-  // ── 군단 전술 생성 (군 지시 + 군 권위 기반) ───────────────
+  // ── 군단 전술 생성 ─────────────────────────────────────────
   const genCorpsTactics = (corpsId) => {
     const c = corps.find(x => x.id === corpsId);
     if (!c) return;
@@ -562,14 +641,12 @@ export default function App() {
     { id: "log",      label: "작전 일지",  locked: !started },
   ];
 
-  // ── 재검토 임박 여부 (헤더 표시용) ──────────────────────────
   const hasReviewDue = started && (
     fieldArmies.some(fa => fa.commander.nextReview !== null && turn >= fa.commander.nextReview) ||
     armies.some(a => a.nextReview !== null && turn >= a.nextReview) ||
     corps.some(c => c.nextReview !== null && turn >= c.nextReview)
   );
 
-  // ── 공통 권위 표시 UI ─────────────────────────────────────
   const authBadge = (auth) => {
     const label = (auth ?? 4) >= 6 ? "고권위" : (auth ?? 4) <= 2 ? "저권위" : "중권위";
     const color = (auth ?? 4) >= 6 ? "text-amber-400" : (auth ?? 4) <= 2 ? "text-blue-400" : "text-gray-500";
@@ -656,229 +733,233 @@ export default function App() {
               placeholder="게임/시나리오 이름"
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 focus:outline-none focus:border-amber-500" />
 
-            {/* 야전군 목록 */}
             {fieldArmies.map(fa => {
-              const faArmies = armies.filter(a => a.fieldArmyId === fa.id);
+              const faArmies  = armies.filter(a => a.fieldArmyId === fa.id);
+              const faCollapsed = fa.collapsed ?? false;
               return (
                 <div key={fa.id} className="bg-gray-800 border-2 border-teal-800 rounded-xl p-4 space-y-3">
                   {/* 야전군 헤더 */}
                   <div className="flex items-center gap-2">
+                    <CollapseBtn collapsed={faCollapsed} onToggle={() => updateFA(fa.id, { collapsed: !faCollapsed })} />
                     <span className="text-teal-400 text-sm">▣</span>
                     <input value={fa.name} onChange={e => updateFA(fa.id, { name: e.target.value })}
                       className="bg-transparent border-b border-gray-600 text-teal-300 font-bold flex-1 focus:outline-none focus:border-teal-400 text-sm" />
                     <button onClick={() => removeFieldArmy(fa.id)}
                       className="text-gray-600 hover:text-red-400 text-base ml-1">×</button>
                   </div>
-                  {/* 야전군 사령관 */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <input value={fa.commander.name}
-                      onChange={e => updateFACmdr(fa.id, { name: e.target.value })}
-                      placeholder="야전군 사령관"
-                      className="bg-transparent border-b border-gray-600 text-gray-200 text-sm flex-1 focus:outline-none focus:border-teal-400" />
-                    <button onClick={() => rollFACmdr(fa.id)}
-                      className="text-xs bg-teal-900 hover:bg-teal-800 border border-teal-700 text-teal-300 px-2 py-1 rounded">
-                      🎲 성향 롤
-                    </button>
-                    <button onClick={() => updateFACmdr(fa.id, { showP: !fa.commander.showP })}
-                      className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                      {fa.commander.showP ? "▲ 접기" : "▼ 성향 설정"}
-                    </button>
-                  </div>
-                  <PBadges personality={fa.commander.personality} />
-                  <div className={`text-xs ${getCmdrCycle(fa.commander.personality[5]).color}`}>
-                    {getCmdrCycle(fa.commander.personality[5]).label}
-                  </div>
-                  {/* 권위 */}
-                  <AuthorityBar authority={fa.commander.authority}
-                    onChange={v => updateFACmdr(fa.id, { authority: v })} />
-                  {/* 성향 슬라이더 */}
-                  {fa.commander.showP && (
-                    <div className="pt-3 border-t border-gray-700">
-                      {P_AXES.map((ax, i) => (
-                        <PSlider key={i} axis={ax} value={fa.commander.personality[i]}
-                          onChange={v => updateFACmdr(fa.id, {
-                            personality: fa.commander.personality.map((x, j) => j === i ? v : x)
-                          })} />
-                      ))}
-                    </div>
-                  )}
 
-                  {/* 군 목록 */}
-                  {faArmies.map(army => {
-                    const au = AUTONOMY[army.autonomy];
-                    const armyCorps = corps.filter(c => c.armyId === army.id);
-                    const roleCfg = army.role ? ROLES[army.role] : null;
-                    return (
-                      <div key={army.id} className={`bg-gray-750 border rounded-xl p-3 space-y-2 ml-2 ${roleCfg ? roleCfg.border : "border-blue-800"}`} style={{ background: "#1a2233" }}>
-                        {/* 군 헤더 */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-blue-400 text-xs">◉</span>
-                          <input value={army.name} onChange={e => updateArmy(army.id, { name: e.target.value })}
-                            className="bg-transparent border-b border-gray-600 text-blue-200 font-bold text-sm flex-1 focus:outline-none focus:border-blue-400" />
-                          <button onClick={() => removeArmy(army.id)}
-                            className="text-gray-600 hover:text-red-400 text-sm ml-1">×</button>
-                        </div>
-                        {/* 목표 지역 */}
-                        <input value={army.sector} onChange={e => updateArmy(army.id, { sector: e.target.value })}
-                          placeholder="목표 지역"
-                          className="bg-transparent border-b border-gray-700 text-gray-500 text-xs focus:outline-none focus:border-blue-400 w-full" />
-                        {/* 역할 라디오 */}
-                        <div className="flex gap-1 flex-wrap">
-                          {Object.entries(ROLES).map(([r, cfg]) => (
-                            <button key={r}
-                              onClick={() => updateArmy(army.id, { role: army.role === r ? null : r })}
-                              className={`text-xs px-2 py-0.5 rounded border transition-colors ${army.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
-                              {cfg.icon} {r}
-                            </button>
-                          ))}
-                        </div>
-                        {/* 자율성 */}
-                        <div className="flex gap-1">
-                          {Object.entries(AUTONOMY).map(([key, a]) => (
-                            <button key={key} onClick={() => updateArmy(army.id, { autonomy: key })}
-                              className={`flex-1 text-xs py-1 rounded border transition-colors ${army.autonomy === key ? a.activeCls : "border-gray-700 text-gray-600 hover:text-gray-400"}`}>
-                              {a.name}
-                            </button>
-                          ))}
-                        </div>
-                        <div className={`text-xs ${au.textCls}`}>{au.desc}</div>
-                        {/* 권위 */}
-                        <AuthorityBar authority={army.authority}
-                          onChange={v => updateArmy(army.id, { authority: v })} />
-                        {/* 성향 */}
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <PBadges personality={army.personality} compact />
-                          <span className={`text-xs ml-auto ${getCycle(army.personality[5]).color}`}>
-                            {getCycle(army.personality[5]).label}
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          <button onClick={() => rollArmyAll(army.id)}
-                            className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                            🎲 성향+자율성 롤
-                          </button>
-                          <button onClick={() => updateArmy(army.id, { showP: !army.showP })}
-                            className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                            {army.showP ? "▲ 접기" : "▼ 성향 설정"}
-                          </button>
-                        </div>
-                        {army.showP && (
-                          <div className="pt-2 border-t border-gray-700">
-                            {P_AXES.map((ax, i) => (
-                              <PSlider key={i} axis={ax} value={army.personality[i]}
-                                onChange={v => updateArmy(army.id, { personality: army.personality.map((x, j) => j === i ? v : x) })} />
-                            ))}
-                          </div>
-                        )}
-                        {/* 전력 현황 */}
-                        <StatusSection
-                          id={army.id} sp={army.sp} units={army.units} showStatus={army.showStatus}
-                          onToggle={() => updateArmy(army.id, { showStatus: !army.showStatus })}
-                          onSpChange={v => updateArmy(army.id, { sp: v })}
-                          onAddUnit={() => addArmyUnit(army.id)}
-                          onRemoveUnit={uId => removeArmyUnit(army.id, uId)}
-                          onUpdateUnit={(uId, patch) => updateArmyUnit(army.id, uId, patch)}
-                          onMoveUnit={(uId, toId) => moveArmyUnit(army.id, uId, toId)}
-                          moveTargets={armies.filter(a => a.id !== army.id).map(a => ({ id: a.id, name: a.name }))}
-                        />
-
-                        {/* 군단 목록 */}
-                        {armyCorps.map(c => {
-                          const cAu = AUTONOMY[c.autonomy];
-                          const cRoleCfg = c.role ? ROLES[c.role] : null;
-                          return (
-                            <div key={c.id} className={`border rounded-xl p-3 space-y-2 ml-2 ${cRoleCfg ? cRoleCfg.border : cAu.cardBorder}`} style={{ background: "#111827" }}>
-                              {/* 군단 헤더 */}
-                              <div className="flex items-center gap-2">
-                                <span className="text-gray-500 text-xs">○</span>
-                                <input value={c.name} onChange={e => updateCorps_(c.id, { name: e.target.value })}
-                                  className="bg-transparent border-b border-gray-700 text-gray-200 font-bold text-xs flex-1 focus:outline-none focus:border-gray-400" />
-                                <button onClick={() => removeCorps_(c.id)}
-                                  className="text-gray-600 hover:text-red-400 text-sm ml-1">×</button>
-                              </div>
-                              {/* 목표 지역 */}
-                              <input value={c.sector} onChange={e => updateCorps_(c.id, { sector: e.target.value })}
-                                placeholder="목표 지역"
-                                className="bg-transparent border-b border-gray-700 text-gray-600 text-xs focus:outline-none focus:border-gray-500 w-full" />
-                              {/* 역할 라디오 */}
-                              <div className="flex gap-1 flex-wrap">
-                                {Object.entries(ROLES).map(([r, cfg]) => (
-                                  <button key={r}
-                                    onClick={() => updateCorps_(c.id, { role: c.role === r ? null : r })}
-                                    className={`text-xs px-2 py-0.5 rounded border transition-colors ${c.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
-                                    {cfg.icon} {r}
-                                  </button>
-                                ))}
-                              </div>
-                              {/* 자율성 */}
-                              <div className="flex gap-1">
-                                {Object.entries(AUTONOMY).map(([key, a]) => (
-                                  <button key={key} onClick={() => updateCorps_(c.id, { autonomy: key })}
-                                    className={`flex-1 text-xs py-1 rounded border transition-colors ${c.autonomy === key ? a.activeCls : "border-gray-700 text-gray-600 hover:text-gray-400"}`}>
-                                    {a.name}
-                                  </button>
-                                ))}
-                              </div>
-                              <div className={`text-xs ${cAu.textCls}`}>{cAu.desc}</div>
-                              {/* 성향 */}
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <PBadges personality={c.personality} compact />
-                                <span className={`text-xs ml-auto ${getCycle(c.personality[5]).color}`}>
-                                  {getCycle(c.personality[5]).label}
-                                </span>
-                              </div>
-                              <div className="flex gap-2">
-                                <button onClick={() => rollCorpsAll(c.id)}
-                                  className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                                  🎲 성향+자율성 롤
-                                </button>
-                                <button onClick={() => updateCorps_(c.id, { showP: !c.showP })}
-                                  className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
-                                  {c.showP ? "▲ 접기" : "▼ 성향 설정"}
-                                </button>
-                              </div>
-                              {c.showP && (
-                                <div className="pt-2 border-t border-gray-700">
-                                  {P_AXES.map((ax, i) => (
-                                    <PSlider key={i} axis={ax} value={c.personality[i]}
-                                      onChange={v => updateCorps_(c.id, { personality: c.personality.map((x, j) => j === i ? v : x) })} />
-                                  ))}
-                                </div>
-                              )}
-                              {/* 전력 현황 */}
-                              <StatusSection
-                                id={c.id} sp={c.sp} units={c.units} showStatus={c.showStatus}
-                                onToggle={() => updateCorps_(c.id, { showStatus: !c.showStatus })}
-                                onSpChange={v => updateCorps_(c.id, { sp: v })}
-                                onAddUnit={() => addCorpsUnit(c.id)}
-                                onRemoveUnit={uId => removeCorpsUnit(c.id, uId)}
-                                onUpdateUnit={(uId, patch) => updateCorpsUnit(c.id, uId, patch)}
-                                onMoveUnit={(uId, toId) => moveCorpsUnit(c.id, uId, toId)}
-                                moveTargets={corps.filter(x => x.armyId === army.id && x.id !== c.id).map(x => ({ id: x.id, name: x.name }))}
-                              />
-                            </div>
-                          );
-                        })}
-
-                        {/* 군단 추가 */}
-                        <button onClick={() => addCorps_(army.id)}
-                          className="w-full border border-dashed border-gray-700 hover:border-gray-500 rounded-lg py-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors">
-                          + 군단 추가
+                  {!faCollapsed && (
+                    <>
+                      {/* 야전군 사령관 */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input value={fa.commander.name}
+                          onChange={e => updateFACmdr(fa.id, { name: e.target.value })}
+                          placeholder="야전군 사령관"
+                          className="bg-transparent border-b border-gray-600 text-gray-200 text-sm flex-1 focus:outline-none focus:border-teal-400" />
+                        <button onClick={() => rollFACmdr(fa.id)}
+                          className="text-xs bg-teal-900 hover:bg-teal-800 border border-teal-700 text-teal-300 px-2 py-1 rounded">
+                          🎲 성향 롤
+                        </button>
+                        <button onClick={() => updateFACmdr(fa.id, { showP: !fa.commander.showP })}
+                          className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                          {fa.commander.showP ? "▲ 접기" : "▼ 성향 설정"}
                         </button>
                       </div>
-                    );
-                  })}
+                      <PBadges personality={fa.commander.personality} />
+                      <div className={`text-xs ${getCmdrCycle(fa.commander.personality[5]).color}`}>
+                        {getCmdrCycle(fa.commander.personality[5]).label}
+                      </div>
+                      <AuthorityBar authority={fa.commander.authority}
+                        onChange={v => updateFACmdr(fa.id, { authority: v })} />
+                      {fa.commander.showP && (
+                        <div className="pt-3 border-t border-gray-700">
+                          {P_AXES.map((ax, i) => (
+                            <PSlider key={i} axis={ax} value={fa.commander.personality[i]}
+                              onChange={v => updateFACmdr(fa.id, {
+                                personality: fa.commander.personality.map((x, j) => j === i ? v : x)
+                              })} />
+                          ))}
+                        </div>
+                      )}
 
-                  {/* 군 추가 */}
-                  <button onClick={() => addArmy(fa.id)}
-                    className="w-full border border-dashed border-teal-900 hover:border-teal-700 rounded-lg py-1.5 text-teal-800 hover:text-teal-600 text-xs transition-colors">
-                    + 군 추가
-                  </button>
+                      {/* 군 목록 */}
+                      {faArmies.map(army => {
+                        const au         = AUTONOMY[army.autonomy];
+                        const armyCorps  = corps.filter(c => c.armyId === army.id);
+                        const roleCfg    = army.role ? ROLES[army.role] : null;
+                        const armyCollapsed = army.collapsed ?? false;
+                        return (
+                          <div key={army.id} className={`border rounded-xl p-3 space-y-2 ml-2 ${roleCfg ? roleCfg.border : "border-blue-800"}`} style={{ background: "#1a2233" }}>
+                            {/* 군 헤더 */}
+                            <div className="flex items-center gap-2">
+                              <CollapseBtn collapsed={armyCollapsed} onToggle={() => updateArmy(army.id, { collapsed: !armyCollapsed })} />
+                              <span className="text-blue-400 text-xs">◉</span>
+                              <input value={army.name} onChange={e => updateArmy(army.id, { name: e.target.value })}
+                                className="bg-transparent border-b border-gray-600 text-blue-200 font-bold text-sm flex-1 focus:outline-none focus:border-blue-400" />
+                              <button onClick={() => removeArmy(army.id)}
+                                className="text-gray-600 hover:text-red-400 text-sm ml-1">×</button>
+                            </div>
+
+                            {!armyCollapsed && (
+                              <>
+                                <input value={army.sector} onChange={e => updateArmy(army.id, { sector: e.target.value })}
+                                  placeholder="목표 지역"
+                                  className="bg-transparent border-b border-gray-700 text-gray-500 text-xs focus:outline-none focus:border-blue-400 w-full" />
+                                <div className="flex gap-1 flex-wrap">
+                                  {Object.entries(ROLES).map(([r, cfg]) => (
+                                    <button key={r}
+                                      onClick={() => updateArmy(army.id, { role: army.role === r ? null : r })}
+                                      className={`text-xs px-2 py-0.5 rounded border transition-colors ${army.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
+                                      {cfg.icon} {r}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="flex gap-1">
+                                  {Object.entries(AUTONOMY).map(([key, a]) => (
+                                    <button key={key} onClick={() => updateArmy(army.id, { autonomy: key })}
+                                      className={`flex-1 text-xs py-1 rounded border transition-colors ${army.autonomy === key ? a.activeCls : "border-gray-700 text-gray-600 hover:text-gray-400"}`}>
+                                      {a.name}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className={`text-xs ${au.textCls}`}>{au.desc}</div>
+                                <AuthorityBar authority={army.authority}
+                                  onChange={v => updateArmy(army.id, { authority: v })} />
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <PBadges personality={army.personality} compact />
+                                  <span className={`text-xs ml-auto ${getCycle(army.personality[5]).color}`}>
+                                    {getCycle(army.personality[5]).label}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => rollArmyAll(army.id)}
+                                    className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                                    🎲 성향+자율성 롤
+                                  </button>
+                                  <button onClick={() => updateArmy(army.id, { showP: !army.showP })}
+                                    className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                                    {army.showP ? "▲ 접기" : "▼ 성향 설정"}
+                                  </button>
+                                </div>
+                                {army.showP && (
+                                  <div className="pt-2 border-t border-gray-700">
+                                    {P_AXES.map((ax, i) => (
+                                      <PSlider key={i} axis={ax} value={army.personality[i]}
+                                        onChange={v => updateArmy(army.id, { personality: army.personality.map((x, j) => j === i ? v : x) })} />
+                                    ))}
+                                  </div>
+                                )}
+                                <StatusSection
+                                  id={army.id} sp={army.sp} units={army.units} showStatus={army.showStatus}
+                                  onToggle={() => updateArmy(army.id, { showStatus: !army.showStatus })}
+                                  onSpChange={v => updateArmy(army.id, { sp: v })}
+                                  onAddUnit={() => addArmyUnit(army.id)}
+                                  onRemoveUnit={uId => removeArmyUnit(army.id, uId)}
+                                  onUpdateUnit={(uId, patch) => updateArmyUnit(army.id, uId, patch)}
+                                  onMoveUnit={(uId, toValue) => moveUnit("army", army.id, uId, toValue)}
+                                  moveTargets={allMoveTargets("army", army.id)}
+                                />
+
+                                {/* 군단 목록 */}
+                                {armyCorps.map(c => {
+                                  const cAu = AUTONOMY[c.autonomy];
+                                  const cRoleCfg = c.role ? ROLES[c.role] : null;
+                                  const corpsCollapsed = c.collapsed ?? false;
+                                  return (
+                                    <div key={c.id} className={`border rounded-xl p-3 space-y-2 ml-2 ${cRoleCfg ? cRoleCfg.border : cAu.cardBorder}`} style={{ background: "#111827" }}>
+                                      {/* 군단 헤더 */}
+                                      <div className="flex items-center gap-2">
+                                        <CollapseBtn collapsed={corpsCollapsed} onToggle={() => updateCorps_(c.id, { collapsed: !corpsCollapsed })} />
+                                        <span className="text-gray-500 text-xs">○</span>
+                                        <input value={c.name} onChange={e => updateCorps_(c.id, { name: e.target.value })}
+                                          className="bg-transparent border-b border-gray-700 text-gray-200 font-bold text-xs flex-1 focus:outline-none focus:border-gray-400" />
+                                        <button onClick={() => removeCorps_(c.id)}
+                                          className="text-gray-600 hover:text-red-400 text-sm ml-1">×</button>
+                                      </div>
+
+                                      {!corpsCollapsed && (
+                                        <>
+                                          <input value={c.sector} onChange={e => updateCorps_(c.id, { sector: e.target.value })}
+                                            placeholder="목표 지역"
+                                            className="bg-transparent border-b border-gray-700 text-gray-600 text-xs focus:outline-none focus:border-gray-500 w-full" />
+                                          <div className="flex gap-1 flex-wrap">
+                                            {Object.entries(ROLES).map(([r, cfg]) => (
+                                              <button key={r}
+                                                onClick={() => updateCorps_(c.id, { role: c.role === r ? null : r })}
+                                                className={`text-xs px-2 py-0.5 rounded border transition-colors ${c.role === r ? cfg.tagCls + " " + cfg.border : "bg-gray-700 border-gray-600 text-gray-500 hover:text-gray-300"}`}>
+                                                {cfg.icon} {r}
+                                              </button>
+                                            ))}
+                                          </div>
+                                          <div className="flex gap-1">
+                                            {Object.entries(AUTONOMY).map(([key, a]) => (
+                                              <button key={key} onClick={() => updateCorps_(c.id, { autonomy: key })}
+                                                className={`flex-1 text-xs py-1 rounded border transition-colors ${c.autonomy === key ? a.activeCls : "border-gray-700 text-gray-600 hover:text-gray-400"}`}>
+                                                {a.name}
+                                              </button>
+                                            ))}
+                                          </div>
+                                          <div className={`text-xs ${cAu.textCls}`}>{cAu.desc}</div>
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <PBadges personality={c.personality} compact />
+                                            <span className={`text-xs ml-auto ${getCycle(c.personality[5]).color}`}>
+                                              {getCycle(c.personality[5]).label}
+                                            </span>
+                                          </div>
+                                          <div className="flex gap-2">
+                                            <button onClick={() => rollCorpsAll(c.id)}
+                                              className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                                              🎲 성향+자율성 롤
+                                            </button>
+                                            <button onClick={() => updateCorps_(c.id, { showP: !c.showP })}
+                                              className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                                              {c.showP ? "▲ 접기" : "▼ 성향 설정"}
+                                            </button>
+                                          </div>
+                                          {c.showP && (
+                                            <div className="pt-2 border-t border-gray-700">
+                                              {P_AXES.map((ax, i) => (
+                                                <PSlider key={i} axis={ax} value={c.personality[i]}
+                                                  onChange={v => updateCorps_(c.id, { personality: c.personality.map((x, j) => j === i ? v : x) })} />
+                                              ))}
+                                            </div>
+                                          )}
+                                          <StatusSection
+                                            id={c.id} sp={c.sp} units={c.units} showStatus={c.showStatus}
+                                            onToggle={() => updateCorps_(c.id, { showStatus: !c.showStatus })}
+                                            onSpChange={v => updateCorps_(c.id, { sp: v })}
+                                            onAddUnit={() => addCorpsUnit(c.id)}
+                                            onRemoveUnit={uId => removeCorpsUnit(c.id, uId)}
+                                            onUpdateUnit={(uId, patch) => updateCorpsUnit(c.id, uId, patch)}
+                                            onMoveUnit={(uId, toValue) => moveUnit("corps", c.id, uId, toValue)}
+                                            moveTargets={allMoveTargets("corps", c.id)}
+                                          />
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+
+                                <button onClick={() => addCorps_(army.id)}
+                                  className="w-full border border-dashed border-gray-700 hover:border-gray-500 rounded-lg py-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors">
+                                  + 군단 추가
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      <button onClick={() => addArmy(fa.id)}
+                        className="w-full border border-dashed border-teal-900 hover:border-teal-700 rounded-lg py-1.5 text-teal-800 hover:text-teal-600 text-xs transition-colors">
+                        + 군 추가
+                      </button>
+                    </>
+                  )}
                 </div>
               );
             })}
 
-            {/* 야전군 추가 */}
             <button onClick={addFieldArmy}
               className="w-full border-2 border-dashed border-teal-900 hover:border-teal-700 rounded-xl py-8 text-teal-800 hover:text-teal-500 transition-colors">
               <div className="text-3xl mb-1">▣</div>
@@ -886,7 +967,6 @@ export default function App() {
               <div className="text-xs mt-1">클릭하면 사령관 성향+권위 자동 롤</div>
             </button>
 
-            {/* 작전 개시 */}
             <button
               onClick={() => { setStarted(true); setTab("planning"); startPhase(); }}
               disabled={fieldArmies.length === 0}
@@ -928,53 +1008,62 @@ export default function App() {
               </div>
             )}
 
-            {/* 야전군별 지시 + 예하 제대 */}
             {fieldArmies.map(fa => {
-              const faArmies = armies.filter(a => a.fieldArmyId === fa.id);
-              const faAuth   = fa.commander.authority ?? 4;
+              const faArmies   = armies.filter(a => a.fieldArmyId === fa.id);
+              const faAuth     = fa.commander.authority ?? 4;
+              const faCollapsed = fa.collapsed ?? false;
               return (
                 <div key={fa.id} className="space-y-2">
                   {/* 야전군 지시 카드 */}
                   <div className="bg-gray-800 border border-teal-800 rounded-xl p-4">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-teal-300 font-bold text-sm">▣ {fa.name} — 전략 지시</span>
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <div className="flex items-center gap-2">
+                        <CollapseBtn collapsed={faCollapsed} onToggle={() => updateFA(fa.id, { collapsed: !faCollapsed })} />
+                        <span className="text-teal-300 font-bold text-sm">▣ {fa.name} — 전략 지시</span>
+                      </div>
                       {authBadge(faAuth)}
                     </div>
                     <PBadges personality={fa.commander.personality} />
-                    <button onClick={() => updateFACmdr(fa.id, { showS: !fa.commander.showS })}
-                      className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
-                      {fa.commander.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
-                    </button>
-                    {fa.commander.showS && (
-                      <div className="mt-3 pt-3 border-t border-gray-700">
-                        {S_FACTORS.map((f, i) => (
-                          <SSlider key={i} factor={f} value={fa.commander.situation[i]}
-                            onChange={v => updateFACmdr(fa.id, {
-                              situation: fa.commander.situation.map((x, j) => j === i ? v : x)
-                            })} />
-                        ))}
-                      </div>
+
+                    {!faCollapsed && (
+                      <>
+                        <button onClick={() => updateFACmdr(fa.id, { showS: !fa.commander.showS })}
+                          className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
+                          {fa.commander.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
+                        </button>
+                        {fa.commander.showS && (
+                          <div className="mt-3 pt-3 border-t border-gray-700">
+                            {S_FACTORS.map((f, i) => (
+                              <SSlider key={i} factor={f} value={fa.commander.situation[i]}
+                                onChange={v => updateFACmdr(fa.id, {
+                                  situation: fa.commander.situation.map((x, j) => j === i ? v : x)
+                                })} />
+                            ))}
+                          </div>
+                        )}
+                        <button onClick={() => genFieldArmyDirective(fa.id)}
+                          className="mt-3 w-full bg-teal-800 hover:bg-teal-700 py-2 rounded font-bold transition-colors text-sm">
+                          📋 야전군 지시 생성
+                        </button>
+                      </>
                     )}
-                    <button onClick={() => genFieldArmyDirective(fa.id)}
-                      className="mt-3 w-full bg-teal-800 hover:bg-teal-700 py-2 rounded font-bold transition-colors text-sm">
-                      📋 야전군 지시 생성
-                    </button>
                     {fa.commander.directive && <DirectiveCard directive={fa.commander.directive} />}
                   </div>
 
                   {/* 군별 지시 + 군단 전술 */}
-                  {faArmies.map(army => {
+                  {!faCollapsed && faArmies.map(army => {
                     const au         = AUTONOMY[army.autonomy];
                     const armyRb     = reviewBadge(army.nextReview);
                     const armyIsDue  = army.nextReview !== null && turn >= army.nextReview;
                     const armyRole   = army.role ? ROLES[army.role] : null;
                     const armyCorps  = corps.filter(c => c.armyId === army.id);
                     const needsFaDir = !fa.commander.directive;
+                    const armyCollapsed = army.collapsed ?? false;
                     return (
                       <div key={army.id} className={`bg-gray-800 border rounded-xl p-4 ml-4 ${armyIsDue ? "border-red-700" : armyRole ? armyRole.border : "border-blue-800"}`}>
-                        {/* 군 헤더 */}
                         <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                           <div className="flex items-center gap-2 flex-wrap">
+                            <CollapseBtn collapsed={armyCollapsed} onToggle={() => updateArmy(army.id, { collapsed: !armyCollapsed })} />
                             <span className="text-blue-300 font-bold">◉ {army.name}</span>
                             <span className="text-gray-600 text-sm">/ {army.sector}</span>
                             {armyRole && (
@@ -991,47 +1080,54 @@ export default function App() {
                           </div>
                         </div>
                         <PBadges personality={army.personality} />
-                        {(army.sp > 0 || (army.units ?? []).length > 0) && (
-                          <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
-                            <span className="text-gray-500">전력</span>
-                            <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{army.sp ?? 0}</span></span>
-                            <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(army.units ?? []).reduce((s, u) => s + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
-                            {(army.units ?? []).filter(u => !u.supplied).length > 0 && (
-                              <span className="text-red-400 font-bold">⚠ 미보급 {(army.units ?? []).filter(u => !u.supplied).length}</span>
+
+                        {!armyCollapsed && (
+                          <>
+                            {(army.sp > 0 || (army.units ?? []).length > 0) && (
+                              <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
+                                <span className="text-gray-500">전력</span>
+                                <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{army.sp ?? 0}</span></span>
+                                <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(army.units ?? []).reduce((s, u) => s + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
+                                {(army.units ?? []).filter(u => !u.supplied).length > 0 && (
+                                  <span className="text-red-400 font-bold">⚠ 미보급 {(army.units ?? []).filter(u => !u.supplied).length}</span>
+                                )}
+                              </div>
                             )}
-                          </div>
+                            <button onClick={() => updateArmy(army.id, { showS: !army.showS })}
+                              className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
+                              {army.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
+                            </button>
+                            {army.showS && (
+                              <div className="mt-3 pt-3 border-t border-gray-700">
+                                {S_FACTORS.map((f, i) => (
+                                  <SSlider key={i} factor={f} value={army.situation[i]}
+                                    onChange={v => updateArmy(army.id, { situation: army.situation.map((x, j) => j === i ? v : x) })} />
+                                ))}
+                              </div>
+                            )}
+                            <button onClick={() => genArmyDirective(army.id)}
+                              disabled={needsFaDir}
+                              className={`mt-3 w-full disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded text-sm font-semibold transition-colors
+                                ${armyIsDue ? "bg-red-900 hover:bg-red-800 border border-red-700 text-red-200" : "bg-blue-900 hover:bg-blue-800"}`}>
+                              {needsFaDir ? "야전군 지시 먼저 생성" : armyIsDue ? "⚠ 재검토 — 군 지시 갱신" : "📋 군 지시 생성"}
+                            </button>
+                          </>
                         )}
-                        <button onClick={() => updateArmy(army.id, { showS: !army.showS })}
-                          className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-3">
-                          {army.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
-                        </button>
-                        {army.showS && (
-                          <div className="mt-3 pt-3 border-t border-gray-700">
-                            {S_FACTORS.map((f, i) => (
-                              <SSlider key={i} factor={f} value={army.situation[i]}
-                                onChange={v => updateArmy(army.id, { situation: army.situation.map((x, j) => j === i ? v : x) })} />
-                            ))}
-                          </div>
-                        )}
-                        <button onClick={() => genArmyDirective(army.id)}
-                          disabled={needsFaDir}
-                          className={`mt-3 w-full disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded text-sm font-semibold transition-colors
-                            ${armyIsDue ? "bg-red-900 hover:bg-red-800 border border-red-700 text-red-200" : "bg-blue-900 hover:bg-blue-800"}`}>
-                          {needsFaDir ? "야전군 지시 먼저 생성" : armyIsDue ? "⚠ 재검토 — 군 지시 갱신" : "📋 군 지시 생성"}
-                        </button>
                         {army.directive && <DirectiveCard directive={army.directive} />}
 
                         {/* 군단 전술 */}
-                        {armyCorps.map(c => {
+                        {!armyCollapsed && armyCorps.map(c => {
                           const cAu      = AUTONOMY[c.autonomy];
                           const cRb      = reviewBadge(c.nextReview);
                           const cIsDue   = c.nextReview !== null && turn >= c.nextReview;
                           const cRole    = c.role ? ROLES[c.role] : null;
                           const needsArmyDir = !army.directive;
+                          const corpsCollapsed = c.collapsed ?? false;
                           return (
                             <div key={c.id} className={`bg-gray-800 border rounded-xl p-3 ml-4 mt-2 ${cIsDue ? "border-red-700" : cRole ? cRole.border : cAu.cardBorder}`}>
                               <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                                 <div className="flex items-center gap-2 flex-wrap">
+                                  <CollapseBtn collapsed={corpsCollapsed} onToggle={() => updateCorps_(c.id, { collapsed: !corpsCollapsed })} />
                                   <span className="text-gray-200 font-bold text-sm">○ {c.name}</span>
                                   <span className="text-gray-600 text-xs">/ {c.sector}</span>
                                   {cRole && (
@@ -1052,44 +1148,49 @@ export default function App() {
                                 </div>
                               </div>
                               <PBadges personality={c.personality} />
-                              {(c.sp > 0 || (c.units ?? []).length > 0) && (
-                                <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
-                                  <span className="text-gray-500">전력</span>
-                                  <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{c.sp ?? 0}</span></span>
-                                  <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(c.units ?? []).reduce((s, u) => s + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
-                                  {(c.units ?? []).filter(u => !u.supplied).length > 0 && (
-                                    <span className="text-red-400 font-bold">⚠ 미보급 {(c.units ?? []).filter(u => !u.supplied).length}</span>
+
+                              {!corpsCollapsed && (
+                                <>
+                                  {(c.sp > 0 || (c.units ?? []).length > 0) && (
+                                    <div className="mt-2 flex items-center gap-3 text-xs border border-gray-700 rounded px-2 py-1.5 bg-gray-900">
+                                      <span className="text-gray-500">전력</span>
+                                      <span className="text-gray-400">SP <span className="text-gray-200 font-bold">{c.sp ?? 0}</span></span>
+                                      <span className="text-gray-400">전력 <span className="text-gray-200 font-bold">{(c.units ?? []).reduce((s, u) => s + (u.singleStep ? 1 : (u.steps ?? 0)), 0)}</span>스텝</span>
+                                      {(c.units ?? []).filter(u => !u.supplied).length > 0 && (
+                                        <span className="text-red-400 font-bold">⚠ 미보급 {(c.units ?? []).filter(u => !u.supplied).length}</span>
+                                      )}
+                                    </div>
                                   )}
-                                </div>
-                              )}
-                              <button onClick={() => updateCorps_(c.id, { showS: !c.showS })}
-                                className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-2">
-                                {c.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
-                              </button>
-                              {c.showS && (
-                                <div className="mt-3 pt-3 border-t border-gray-700">
-                                  {S_FACTORS.map((f, i) => (
-                                    <SSlider key={i} factor={f} value={c.situation[i]}
-                                      onChange={v => updateCorps_(c.id, { situation: c.situation.map((x, j) => j === i ? v : x) })} />
-                                  ))}
-                                </div>
-                              )}
-                              <button onClick={() => genCorpsTactics(c.id)}
-                                disabled={needsArmyDir}
-                                className={`mt-2 w-full disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded text-sm font-semibold transition-colors
-                                  ${cIsDue ? "bg-red-900 hover:bg-red-800 border border-red-700 text-red-200" : "bg-gray-700 hover:bg-gray-600"}`}>
-                                {needsArmyDir ? "군 지시 먼저 생성" : cIsDue ? "⚠ 재검토 — 전술 갱신" : "⚙ 전술 방침 생성"}
-                              </button>
-                              <ConflictBadge conflict={c.conflict}
-                                autonomy={c.effectiveAutonomy ?? c.autonomy}
-                                onQuickOracle={() => quickOracleCorps(c.id, c.name)} />
-                              {c.quickOracleResult && (
-                                <div className={`mt-2 text-sm font-bold ${c.quickOracleResult.startsWith("예") ? "text-green-400" : "text-red-400"}`}>
-                                  오라클: {c.quickOracleResult}
-                                  <span className="text-gray-600 font-normal ml-2 text-xs">
-                                    {c.quickOracleResult.startsWith("예") ? "→ 독자 행동" : "→ 지시 복귀"}
-                                  </span>
-                                </div>
+                                  <button onClick={() => updateCorps_(c.id, { showS: !c.showS })}
+                                    className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded mt-2">
+                                    {c.showS ? "▲ 전황 접기" : "▼ 전황 입력"}
+                                  </button>
+                                  {c.showS && (
+                                    <div className="mt-3 pt-3 border-t border-gray-700">
+                                      {S_FACTORS.map((f, i) => (
+                                        <SSlider key={i} factor={f} value={c.situation[i]}
+                                          onChange={v => updateCorps_(c.id, { situation: c.situation.map((x, j) => j === i ? v : x) })} />
+                                      ))}
+                                    </div>
+                                  )}
+                                  <button onClick={() => genCorpsTactics(c.id)}
+                                    disabled={needsArmyDir}
+                                    className={`mt-2 w-full disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded text-sm font-semibold transition-colors
+                                      ${cIsDue ? "bg-red-900 hover:bg-red-800 border border-red-700 text-red-200" : "bg-gray-700 hover:bg-gray-600"}`}>
+                                    {needsArmyDir ? "군 지시 먼저 생성" : cIsDue ? "⚠ 재검토 — 전술 갱신" : "⚙ 전술 방침 생성"}
+                                  </button>
+                                  <ConflictBadge conflict={c.conflict}
+                                    autonomy={c.effectiveAutonomy ?? c.autonomy}
+                                    onQuickOracle={() => quickOracleCorps(c.id, c.name)} />
+                                  {c.quickOracleResult && (
+                                    <div className={`mt-2 text-sm font-bold ${c.quickOracleResult.startsWith("예") ? "text-green-400" : "text-red-400"}`}>
+                                      오라클: {c.quickOracleResult}
+                                      <span className="text-gray-600 font-normal ml-2 text-xs">
+                                        {c.quickOracleResult.startsWith("예") ? "→ 독자 행동" : "→ 지시 복귀"}
+                                      </span>
+                                    </div>
+                                  )}
+                                </>
                               )}
                               <TacticsGrid tactics={c.tactics} />
                             </div>
@@ -1147,12 +1248,16 @@ export default function App() {
 
                 {fieldArmies.map(fa => {
                   if (!fa.commander.directive) return null;
-                  const faArmies = armies.filter(a => a.fieldArmyId === fa.id);
+                  const faArmies   = armies.filter(a => a.fieldArmyId === fa.id);
+                  const sCollapsed = summaryFaCollapsed[fa.id] ?? false;
                   return (
                     <div key={fa.id} className="space-y-2">
-                      {/* 야전군 지시 */}
                       <div className={`border-2 rounded-xl p-4 ${fa.commander.directive.border} ${fa.commander.directive.bg}`}>
-                        <div className="text-gray-400 text-xs mb-1 uppercase tracking-wide">▣ {fa.name} 전략 지시</div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <CollapseBtn collapsed={sCollapsed}
+                            onToggle={() => setSummaryFaCollapsed(m => ({ ...m, [fa.id]: !sCollapsed }))} />
+                          <div className="text-gray-400 text-xs uppercase tracking-wide">▣ {fa.name} 전략 지시</div>
+                        </div>
                         <div className={`text-2xl font-bold ${fa.commander.directive.text}`}>
                           {fa.commander.directive.icon} {fa.commander.directive.name}
                         </div>
@@ -1160,8 +1265,8 @@ export default function App() {
                           {fa.commander.directive.desc}
                         </div>
                       </div>
-                      {/* 군별 */}
-                      {faArmies.map(army => {
+
+                      {!sCollapsed && faArmies.map(army => {
                         const armyCorps = corps.filter(c => c.armyId === army.id);
                         return (
                           <div key={army.id} className="ml-4 space-y-2">
@@ -1173,7 +1278,6 @@ export default function App() {
                                 </div>
                               </div>
                             )}
-                            {/* 군단 전술 */}
                             <div className="ml-4 grid grid-cols-1 gap-2">
                               {armyCorps.map(c => {
                                 const au         = AUTONOMY[c.autonomy];
@@ -1460,70 +1564,145 @@ export default function App() {
               </div>
             )}
 
+            {/* ── 전투 기록 (계층형 네비 + 복수 제대) ── */}
             {logInputMode === "battle" && (
               <div className="bg-gray-800 border border-orange-900 rounded-xl p-4 space-y-4">
+
+                {/* 1단계: 야전군 선택 */}
                 <div>
-                  <div className="text-gray-500 text-xs mb-1.5">제대 선택</div>
+                  <div className="text-gray-500 text-xs mb-1.5">① 야전군</div>
                   <div className="flex flex-wrap gap-2">
-                    {allBattleUnits().map(s => (
-                      <button key={s.id} onClick={() => handleBattleSubChange(s.id)}
-                        className={`text-sm px-3 py-1.5 rounded border transition-colors
-                          ${battleSubId === s.id ? "bg-orange-900 border-orange-600 text-orange-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
-                        {s._label}
+                    {fieldArmies.map(fa => (
+                      <button key={fa.id}
+                        onClick={() => { setBattleNavFaId(fa.id); setBattleNavArmyId(""); setBattleNavCorpsId(""); setBattlePendingIds([]); }}
+                        className={`text-xs px-3 py-1.5 rounded border transition-colors
+                          ${battleNavFaId === fa.id ? "bg-teal-900 border-teal-600 text-teal-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                        ▣ {fa.name}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {battleSubId && (() => {
-                  const sub     = allBattleUnits().find(s => s.id === battleSubId);
-                  const subUnits = sub?.units ?? [];
-                  const selectedUnits = subUnits.filter(u => battleUnitIds.includes(u.id));
+                {/* 2단계: 군 선택 */}
+                {battleNavFaId && (() => {
+                  const faArmies = armies.filter(a => a.fieldArmyId === battleNavFaId);
+                  if (faArmies.length === 0) return <div className="text-gray-600 text-xs">소속 군 없음</div>;
                   return (
-                    <div className="space-y-2">
-                      <div className="text-gray-500 text-xs">참가 유닛 <span className="text-gray-700">(선택 안 하면 제대 전체)</span></div>
-                      {subUnits.length === 0
-                        ? <div className="text-gray-700 text-xs">등록된 유닛 없음</div>
-                        : (
-                          <div className="flex flex-wrap gap-2">
-                            {subUnits.map(u => (
-                              <button key={u.id} onClick={() => toggleBattleUnit(u.id)}
-                                className={`text-xs px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5
-                                  ${battleUnitIds.includes(u.id) ? "bg-orange-900 border-orange-600 text-orange-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
-                                {battleUnitIds.includes(u.id) && <span>✓</span>}
-                                {u.name || "(이름 없음)"}
-                                <span className={`opacity-60 ${!u.supplied ? "text-red-400" : ""}`}>
-                                  {u.singleStep ? 1 : u.steps}스텝{!u.supplied ? " ⚠" : ""}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )
-                      }
-                      {selectedUnits.length > 0 && (
-                        <div className="space-y-1 pt-1">
-                          <div className="text-gray-600 text-xs">전투 후 스텝</div>
-                          {selectedUnits.map(u => {
-                            const curSteps = u.singleStep ? 1 : (u.steps ?? 0);
-                            return (
-                              <div key={u.id} className="flex items-center gap-2 bg-gray-700 rounded px-2 py-1">
-                                <span className="text-xs text-gray-300 flex-1 truncate">{u.name || "(이름 없음)"}</span>
-                                <span className="text-xs text-gray-500">{curSteps}스텝 →</span>
-                                <input type="number" min={0} max={curSteps}
-                                  value={battleUnitSteps[u.id] ?? ""}
-                                  onChange={e => setBattleUnitSteps(prev => ({ ...prev, [u.id]: e.target.value }))}
-                                  placeholder="?"
-                                  className="bg-gray-600 border border-gray-500 rounded px-1.5 py-0.5 text-orange-200 text-xs w-14 text-center focus:outline-none focus:border-orange-400" />
-                                <span className="text-xs text-gray-500">스텝</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                    <div>
+                      <div className="text-gray-500 text-xs mb-1.5">② 군</div>
+                      <div className="flex flex-wrap gap-2">
+                        {faArmies.map(army => (
+                          <button key={army.id}
+                            onClick={() => { setBattleNavArmyId(army.id); setBattleNavCorpsId(""); setBattlePendingIds([]); }}
+                            className={`text-xs px-3 py-1.5 rounded border transition-colors
+                              ${battleNavArmyId === army.id ? "bg-blue-900 border-blue-600 text-blue-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                            ◉ {army.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}
 
+                {/* 3단계: 군단/직할 선택 */}
+                {battleNavArmyId && (() => {
+                  const armyCorps = corps.filter(c => c.armyId === battleNavArmyId);
+                  const army = armies.find(a => a.id === battleNavArmyId);
+                  const hasDirectUnits = (army?.units ?? []).length > 0;
+                  return (
+                    <div>
+                      <div className="text-gray-500 text-xs mb-1.5">③ 군단 / 직할</div>
+                      <div className="flex flex-wrap gap-2">
+                        {hasDirectUnits && (
+                          <button
+                            onClick={() => { setBattleNavCorpsId("_direct"); setBattlePendingIds([]); }}
+                            className={`text-xs px-3 py-1.5 rounded border transition-colors
+                              ${battleNavCorpsId === "_direct" ? "bg-amber-900 border-amber-600 text-amber-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                            ★ 직할 유닛
+                          </button>
+                        )}
+                        {armyCorps.map(c => (
+                          <button key={c.id}
+                            onClick={() => { setBattleNavCorpsId(c.id); setBattlePendingIds([]); }}
+                            className={`text-xs px-3 py-1.5 rounded border transition-colors
+                              ${battleNavCorpsId === c.id ? "bg-orange-900 border-orange-600 text-orange-200" : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                            ○ {c.name}
+                          </button>
+                        ))}
+                        {armyCorps.length === 0 && !hasDirectUnits && (
+                          <span className="text-gray-600 text-xs">소속 유닛 없음</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 4단계: 유닛 선택 + 추가 버튼 */}
+                {battleNavCorpsId && (() => {
+                  const currentUnits = battleCurrentUnits();
+                  if (currentUnits.length === 0) {
+                    return <div className="text-gray-600 text-xs">등록된 유닛 없음</div>;
+                  }
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-gray-500 text-xs">유닛 선택 후 추가</div>
+                      <div className="flex flex-wrap gap-2">
+                        {currentUnits.map(u => {
+                          const alreadyAdded = battleParticipants.some(p => p.unitId === u.id);
+                          const isPending    = battlePendingIds.includes(u.id);
+                          return (
+                            <button key={u.id}
+                              disabled={alreadyAdded}
+                              onClick={() => setBattlePendingIds(ids =>
+                                isPending ? ids.filter(i => i !== u.id) : [...ids, u.id]
+                              )}
+                              className={`text-xs px-2.5 py-1.5 rounded border transition-colors flex items-center gap-1.5
+                                ${alreadyAdded ? "bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed opacity-50"
+                                  : isPending ? "bg-orange-900 border-orange-600 text-orange-200"
+                                  : "bg-gray-700 border-gray-600 text-gray-400 hover:text-gray-200"}`}>
+                              {isPending && <span>✓</span>}
+                              {alreadyAdded && <span>✓</span>}
+                              {u.name || "(이름 없음)"}
+                              <span className={`opacity-60 ${!u.supplied ? "text-red-400" : ""}`}>
+                                {u.singleStep ? 1 : u.steps}스텝{!u.supplied ? " ⚠" : ""}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button onClick={addBattleParticipants} disabled={battlePendingIds.length === 0}
+                        className="text-xs bg-orange-800 hover:bg-orange-700 disabled:opacity-30 disabled:cursor-not-allowed px-3 py-1.5 rounded transition-colors">
+                        + 참가 추가 ({battlePendingIds.length})
+                      </button>
+                    </div>
+                  );
+                })()}
+
+                {/* 누적된 참가 유닛 목록 */}
+                {battleParticipants.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-gray-700">
+                    <div className="text-gray-400 text-xs font-bold">전투 참가 유닛 ({battleParticipants.length})</div>
+                    {battleParticipants.map(p => (
+                      <div key={p.unitId} className="flex items-center gap-2 bg-gray-700 rounded px-2 py-1.5">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs text-gray-300 font-medium">{p.name || "(이름 없음)"}</span>
+                          <span className="text-xs text-gray-600 ml-2">{p.entityName}</span>
+                        </div>
+                        <span className="text-xs text-gray-500 shrink-0">{p.curSteps}스텝 →</span>
+                        <input type="number" min={0} max={p.curSteps}
+                          value={p.stepAfter}
+                          onChange={e => updateParticipantStep(p.unitId, e.target.value)}
+                          placeholder="?"
+                          className="bg-gray-600 border border-gray-500 rounded px-1.5 py-0.5 text-orange-200 text-xs w-14 text-center focus:outline-none focus:border-orange-400" />
+                        <span className="text-xs text-gray-500">스텝</span>
+                        <button onClick={() => removeBattleParticipant(p.unitId)}
+                          className="text-gray-600 hover:text-red-400 text-sm shrink-0">×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 공격/방어 */}
                 <div>
                   <div className="text-gray-500 text-xs mb-1.5">공격 / 방어</div>
                   <div className="flex gap-2">
@@ -1537,6 +1716,7 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* 전투 결과 */}
                 <div>
                   <div className="text-gray-500 text-xs mb-1.5">전투 결과</div>
                   <input value={battleResult} onChange={e => setBattleResult(e.target.value)}
@@ -1544,6 +1724,7 @@ export default function App() {
                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-orange-500" />
                 </div>
 
+                {/* 비고 */}
                 <div>
                   <div className="text-gray-500 text-xs mb-1.5">비고 (선택)</div>
                   <input value={battleNote} onChange={e => setBattleNote(e.target.value)}
@@ -1552,7 +1733,7 @@ export default function App() {
                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-orange-500" />
                 </div>
 
-                <button onClick={addBattle} disabled={!battleSubId || !battleResult}
+                <button onClick={addBattle} disabled={!battleResult}
                   className="w-full bg-orange-800 hover:bg-orange-700 disabled:opacity-30 disabled:cursor-not-allowed py-2 rounded font-bold text-sm transition-colors">
                   ⚔ 전투 결과 기록
                 </button>
